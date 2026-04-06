@@ -1,5 +1,5 @@
 # Compiled schema binary
-schemas/gschemas.compiled
+gnome-extension/schemas/gschemas.compiled
 
 # GNOME Shell logs
 *.log

@@ -1,0 +1,22 @@
+{
+    "KPlugin": {
+        "Id": "com.github.amogh.ipllivescore",
+        "Name": "IPL Live Score",
+        "Description": "Live IPL cricket scores in your KDE Plasma panel",
+        "Icon": "application-x-executable",
+        "Authors": [
+            {
+                "Name": "Amogh",
+                "Email": ""
+            }
+        ],
+        "Category": "Online Services",
+        "License": "MIT",
+        "Version": "1.0.0",
+        "Website": "https://github.com/amogh-kalalbandi/ipl-live-score-gnome-extension"
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API": "declarativeappletscript",
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "X-Plasma-MainScript": "ui/main.qml"
+}

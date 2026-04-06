@@ -1,105 +1,110 @@
-# 🏏 IPL Live Score — GNOME Shell Extension
+# 🏏 IPL Live Score — Linux Desktop Extension
 
-**Live IPL scores in your top bar. Zero dependencies. Zero API keys. Pure GNOME.**
+**Live IPL scores on your desktop. Any DE. Zero dependencies.**
 
-A lightweight, native GNOME Shell extension that streams live Indian Premier League scores directly into your desktop panel. Built entirely in GJS with Soup 3 — no Python scrapers, no Node servers, no authentication tokens. Just install and watch.
+A collection of native widgets and scripts that stream live Indian Premier League scores directly into your Linux desktop panel — whether you use GNOME, KDE Plasma, Sway/Hyprland, i3, or XFCE.
 
 ---
 
-## ✨ Features
+## 📦 Platforms
+
+| Platform | Type | Location |
+|---|---|---|
+| **GNOME Shell 45–50** | Native Extension (GJS) | [`gnome-extension/`](gnome-extension/) |
+| **KDE Plasma 6** | Native Plasmoid (QML) | [`kde-plasmoid/`](kde-plasmoid/) |
+| **Waybar** (Sway/Hyprland) | Python Script → JSON | [`universal-script/`](universal-script/) |
+| **Polybar** (i3/bspwm) | Python Script → Text | [`universal-script/`](universal-script/) |
+| **XFCE Genmon** | Python Script → Text | [`universal-script/`](universal-script/) |
+
+---
+
+## ✨ Core Features (Shared Across All Platforms)
 
 ### 📡 Live Score Ticker
-- Displays the active IPL match score in the GNOME top bar using abbreviated team names (CSK, RCB, MI, etc.)
+- Displays the active IPL match score using abbreviated team names (CSK, RCB, MI, etc.)
 - The 🏏 emoji marks the currently batting team
 
-### 🧠 Smart Polling Engine
-- **Active Mode** — Locks into a configurable refresh rate (default 60s) when matches are live or scheduled
-- **Toss Hunting** — Autonomously wakes up at **3 PM** and **7 PM** IST to detect new matches
-- **Deep Sleep** — Drops to a 1-hour interval when no matches are active, saving battery and bandwidth
-- **Network Resilience** — Automatically backs off to 1-hour polling if the network is down
+### 🧠 Smart State Math
+- Cricinfo's RSS feed leaves a buggy `*` on completed matches.
+- Our engine parses the actual runs/wickets to determine the true match state.
+- A match is only classified as "live" if it has a `*` **AND** isn't mathematically over.
 
-### 📋 Native Dashboard Menu
-Click the top bar score to open a categorized dropdown:
+### 🏗️ Priority Selector
+- **Live Match** → **Completed Match** → **Scheduled Match**
+- On double-header days, the truly live match always wins.
+
+### 📋 Categorized Dashboard
+All platforms display matches sorted into:
 - 🔴 **ONGOING** — Live matches in progress
 - ✅ **COMPLETED** — Finished matches with final scores
-- 📅 **SCHEDULED** — Upcoming matches yet to start
-- 🌐 **Open in Browser** — Jump straight to the match page on Cricinfo
-- 📋 **Copy Score** — One-click copy to clipboard
-- 🕐 **Last Updated** — Timestamp of the most recent fetch
-
-### 🔔 Match-End Notifications
-- Fires a native GNOME desktop notification the instant a match ends
-- Notification history is **persisted to disk** via GSettings — no spam on reboot or session restart
-
-### ⚙️ Preferences GUI
-- **Refresh Interval** — Adjust the active polling rate (10–300 seconds) via a Libadwaita spin row
-- **Favorite Team** — Pick your team from a dropdown. If they're playing:
-  - The top bar score turns **gold** ✨
-  - Their match is **always prioritized** in the panel, overriding the standard live → started → scheduled fallback
-
-### 🏗️ Double-Header Ready
-- On days with multiple IPL matches, the extension uses a 4-tier priority selector:
-  1. **Favorite team** match (if set)
-  2. **Currently live** match
-  3. **Most recently started** match
-  4. **Upcoming scheduled** match
+- 📅 **SCHEDULED** — Upcoming matches
 
 ---
 
-## 📦 Installation
+## 🚀 Installation & Usage
 
-### From ZIP (Recommended)
+### 1. GNOME Shell Extension
+The GNOME extension is a fully-fledged desktop applet featuring a smart polling engine (deep sleep modes), Libadwaita settings, and match-end notifications.
 
+**Install from ZIP:**
 ```bash
-gnome-extensions install ipl-live-score.zip
-```
-
-Log out and log back in (or restart GNOME Shell), then enable:
-
-```bash
+gnome-extensions install ipl-live-score@amogh.shell-extension.zip
 gnome-extensions enable ipl-live-score@amogh
 ```
 
-### From Source
-
+**Install from source:**
 ```bash
-git clone https://github.com/amogh-kalalbandi/ipl-live-score-gnome-extension.git
-cd ipl-live-score-gnome-extension
-
-# Compile the GSettings schema
-glib-compile-schemas schemas/
-
-# Symlink into your local extensions directory
-ln -sf "$(pwd)" ~/.local/share/gnome-shell/extensions/ipl-live-score@amogh
-```
-
-Log out and log back in, then enable the extension via GNOME Extensions or:
-
-```bash
+glib-compile-schemas gnome-extension/schemas/
+ln -sf "$(pwd)/gnome-extension" ~/.local/share/gnome-shell/extensions/ipl-live-score@amogh
 gnome-extensions enable ipl-live-score@amogh
 ```
 
----
+### 2. KDE Plasma 6 Plasmoid
+A native QML/JS widget that uses `XMLHttpRequest`, presenting a compact panel ticker and a categorized expander popup.
 
-## 🔧 Building from Source
-
-The only build step is compiling the GSettings schema:
-
+**Install via `kpackagetool6`:**
 ```bash
-glib-compile-schemas schemas/
+kpackagetool6 -i kde-plasmoid/
+```
+*(For development, you can use `kpackagetool6 -t Plasma/Applet -i kde-plasmoid/`)*
+
+Right-click your panel → **Add Widgets** → Search for "IPL Live Score" → Drag to panel.
+
+### 3. Waybar (Sway / Hyprland)
+Uses the zero-dependency universal Python script built specifically to output standard Waybar JSON format.
+
+**Waybar Config (`~/.config/waybar/config`):**
+```json
+"custom/ipl": {
+    "exec": "python3 /path/to/universal-script/ipl_score.py --format waybar",
+    "return-type": "json",
+    "interval": 60,
+    "tooltip": true
+}
 ```
 
-This generates the binary `gschemas.compiled` file that GNOME reads at runtime. Without this step, the extension will throw a `schema_id undefined` error on launch.
+### 4. Polybar (i3 / bspwm)
+Uses the universal script but formatted as multi-line plain text.
 
-**No `npm install`. No `pip install`. No build toolchain.** The extension is pure GJS and runs directly in the GNOME Shell process.
+**Polybar Config (`~/.config/polybar/config.ini`):**
+```ini
+[module/ipl]
+type = custom/script
+exec = python3 /path/to/universal-script/ipl_score.py --format text | head -1
+interval = 60
+```
+
+### 5. XFCE Genmon
+Add a "Generic Monitor" panel item to your XFCE panel and set the command to:
+```bash
+python3 /path/to/universal-script/ipl_score.py --format text | head -1
+```
 
 ---
 
 ## 🔬 Under the Hood
 
 ### Why RSS instead of a JSON REST API?
-
-Most cricket score extensions rely on heavy JSON endpoints that require authentication tokens, rate-limit aggressively, or change their schema without warning. We took a different approach:
 
 | | JSON REST API | RSS Feed |
 |---|---|---|
@@ -109,62 +114,23 @@ Most cricket score extensions rely on heavy JSON endpoints that require authenti
 | **Schema Stability** | Breaks frequently | Unchanged for 10+ years |
 | **Parsing** | Deep object traversal | Single regex extraction |
 
-The extension fetches `http://static.cricinfo.com/rss/livescores.xml` — a tiny, static XML file that Cricinfo has served reliably for over a decade. We parse it with a single regex pass, filter for IPL team names, and abbreviate them for display. The entire fetch-parse-render cycle completes in under 5ms.
+The extension fetches `http://static.cricinfo.com/rss/livescores.xml` — a tiny, static XML file that Cricinfo has served reliably for over a decade.
 
-### Architecture
+---
+
+## 🏗️ Project Structure
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  GNOME Shell                     │
-│                                                  │
-│  ┌──────────────┐    ┌────────────────────────┐  │
-│  │  Top Bar      │    │  Dropdown Menu         │  │
-│  │  St.Label     │◄───│  PopupMenu.Button      │  │
-│  │  "CSK 182/4🏏"│    │  ├─ Open in Browser    │  │
-│  └──────┬───────┘    │  ├─ Copy Score          │  │
-│         │            │  ├─ 🔴 ONGOING          │  │
-│         │            │  ├─ ✅ COMPLETED        │  │
-│         │            │  ├─ 📅 SCHEDULED        │  │
-│         │            │  └─ Refresh Now         │  │
-│         │            └────────────────────────┘  │
-│         │                                        │
-│  ┌──────▼────────────────────────────────────┐   │
-│  │  Polling Engine                            │   │
-│  │  ├─ Active: 60s (match live)              │   │
-│  │  ├─ Hunting: 60s (3 PM / 7 PM)           │   │
-│  │  └─ Deep Sleep: 3600s (idle)              │   │
-│  └──────┬────────────────────────────────────┘   │
-│         │                                        │
-│  ┌──────▼────────────────────────────────────┐   │
-│  │  Soup 3 (HTTP)                             │   │
-│  │  GET static.cricinfo.com/rss/livescores.xml│   │
-│  └───────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────┘
+.
+├── gnome-extension/          # GNOME Shell 45-50 native extension (GJS)
+├── kde-plasmoid/             # KDE Plasma 6 native widget (QML)
+├── universal-script/         # Universal Waybar/Polybar/XFCE script (Python)
+└── README.md                 # Universal instructions
 ```
 
 ---
 
-## 🖥️ Compatibility
+## 📄 License & Credits
 
-| GNOME Shell | Status |
-|---|---|
-| 45 | ✅ Supported |
-| 46 | ✅ Supported |
-| 47 | ✅ Supported |
-| 48 | ✅ Supported |
-| 49 | ✅ Supported |
-| 50 | ✅ Supported |
-
----
-
-## 📄 License
-
-MIT
-
----
-
-## 🙏 Credits
-
+- **License**: MIT
 - **Data Source**: [ESPN Cricinfo](https://www.espncricinfo.com) RSS Feed
-- **Platform**: [GNOME Shell Extensions](https://extensions.gnome.org)
-- **GJS Guide**: [gjs.guide](https://gjs.guide/extensions/)
