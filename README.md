@@ -44,16 +44,22 @@ All platforms display matches dynamically sorted into:
 ## 🚀 Installation & Usage
 
 ### Method 1: The Auto-Installer (Recommended)
-If you cloned this repository, we provide a highly intelligent, auto-detecting `Makefile` that scans your OS and Desktop Environment to install the correct native version automatically.
+Use the included `Makefile` to auto-detect your OS and Desktop Environment to install the correct widget.
 
-Open a terminal in the project root and run:
-```bash
-make install
-```
-*This will evaluate your environment (`$XDG_CURRENT_DESKTOP`, `uname -s`, etc.) and automatically compile/install the correct widget.*
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/Amogh-Gurudatta/IPL-Live-Score.git
+   cd IPL-Live-Score
+   ```
+
+2. **Run the installer:**
+   ```bash
+   make install
+   ```
+   *This will evaluate your environment (`$XDG_CURRENT_DESKTOP`, `uname -s`, etc.) and automatically compile/install the correct widget.*
 
 #### Manual Overrides
-To force an installation for a specific environment, or view all installation options, run:
+To force an installation for a specific environment (e.g., if auto-detect fails), or to view all available installation options, run:
 ```bash
 make help
 ```
@@ -61,33 +67,51 @@ make help
 ---
 
 ### Method 2: Manual Install from GitHub Releases
-If you downloaded the pre-packaged files from the **[Releases](https://github.com/Amogh-Gurudatta/IPL-Live-Score/releases)** page, follow these instructions based on the file you downloaded:
+Alternatively, download the pre-packaged files directly from the **[Releases](https://github.com/Amogh-Gurudatta/IPL-Live-Score/releases)** page and install manually:
 
-- **GNOME (`ipl-live-score-gnome.zip`)**:
-  ```bash
-  gnome-extensions install ipl-live-score-gnome.zip
-  # Log out and log back in, then enable via GNOME Extensions app
-  ```
+#### 1. GNOME (`ipl-live-score-gnome.zip`)
+1. Open a terminal and install the extension:
+   ```bash
+   gnome-extensions install ipl-live-score-gnome.zip
+   ```
+2. **Important:** Log out and log back in, or restart GNOME Shell (Alt+F2 -> `r` -> Enter, on X11).
+3. Open the **Extensions** app and enable "IPL Live Score".
 
-- **KDE Plasma (`ipl-live-score-kde.plasmoid`)**:
-  ```bash
-  kpackagetool6 -i ipl-live-score-kde.plasmoid
-  # Add to your panel via the "Add Widgets" menu
-  ```
+#### 2. KDE Plasma (`ipl-live-score-kde.plasmoid`)
+1. Open a terminal and install the plasmoid:
+   ```bash
+   kpackagetool6 -i ipl-live-score-kde.plasmoid
+   ```
+2. Right-click your panel -> **Enter Edit Mode** -> **Add Widgets**.
+3. Search for "IPL Live Score" and drag it onto your panel.
 
-- **Cinnamon (`ipl-live-score-cinnamon.zip`)**:
-  Extract the ZIP and place the isolated `ipl-live-score@amogh` folder directly into `~/.local/share/cinnamon/applets/`
-  
-- **COSMIC** (Source Build):
-  You will need to manually clone this repository and run `make install-cosmic` to build the applet locally, as COSMIC updates rapidly and binaries are hardware-dependent.
+#### 3. Cinnamon (`ipl-live-score-cinnamon.zip`)
+1. Extract the ZIP file.
+2. Move the nested `ipl-live-score@amogh` folder into your local applets directory:
+   ```bash
+   mv ipl-live-score@amogh ~/.local/share/cinnamon/applets/
+   ```
+3. Right-click your panel -> **Applets** -> **Manage** tab, find "IPL Live Score", and click the `+` icon to add it.
 
-#### Window Managers & macOS (`ipl_score.py`)
+#### 4. COSMIC
+Since COSMIC is still under heavy development and binaries are hardware-dependent, it is highly recommended to build from source. Clone this repository and run `make install-cosmic`.
+
+#### 5. Window Managers & macOS (`ipl_score.py`)
 If you downloaded the standalone **Universal Python Script**:
-Make the script executable (`chmod +x ipl_score.py`) and move it to `~/.local/bin/ipl_score`, then hook it into your bar:
-- **Waybar**: Add to config: `"custom/ipl": { "exec": "~/.local/bin/ipl_score --format waybar", "return-type": "json", "interval": 60 }`
-- **Polybar**: `exec = ~/.local/bin/ipl_score --format text | head -1`
-- **dwm**: `xsetroot -name "$(~/.local/bin/ipl_score --format dwm)"`
-- **macOS xbar**: Copy the script into `~/Library/Application Support/xbar/plugins/ipl_score.1m.py` and ensure the `.1m.py` suffix is intact.
+1. Make the script executable and copy it to a location in your PATH:
+   ```bash
+   chmod +x ipl_score.py
+   mkdir -p ~/.local/bin
+   mv ipl_score.py ~/.local/bin/ipl_score
+   ```
+2. Hook it into your bar of choice:
+   - **Waybar**: Add to your config: `"custom/ipl": { "exec": "~/.local/bin/ipl_score --format waybar", "return-type": "json", "interval": 60 }`
+   - **Polybar**: `exec = ~/.local/bin/ipl_score --format text | head -1`
+   - **dwm**: `xsetroot -name "$(~/.local/bin/ipl_score --format dwm)"`
+   - **macOS xbar**: Move the script into your plugins directory and ensure the `.1m.py` suffix is intact for a 1-minute refresh rate:
+     ```bash
+     mv ~/.local/bin/ipl_score ~/Library/Application\ Support/xbar/plugins/ipl_score.1m.py
+     ```
 
 ---
 
