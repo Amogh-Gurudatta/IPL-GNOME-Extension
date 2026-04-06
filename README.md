@@ -1,8 +1,8 @@
-# 🏏 IPL Live Score — Linux Desktop Extension
+# 🏏 IPL Live Score — Desktop Extension
 
-**Live IPL scores on your desktop. Any DE. Zero fuss.**
+**Live IPL scores on your desktop. Any DE. Any OS. Zero fuss.**
 
-A collection of native widgets and scripts that stream live Indian Premier League scores directly into your Linux desktop panel — whether you use GNOME, KDE Plasma, COSMIC, Sway/Hyprland, i3, dwm, or XFCE.
+A collection of native widgets and scripts that stream live Indian Premier League scores directly into your desktop panel — whether you use GNOME, KDE Plasma, COSMIC, Cinnamon, Sway/Hyprland, i3, dwm, XFCE, MATE, or macOS.
 
 ---
 
@@ -13,10 +13,13 @@ A collection of native widgets and scripts that stream live Indian Premier Leagu
 | **GNOME Shell 45–50** | Native Extension (GJS) | [`gnome-extension/`](gnome-extension/) |
 | **KDE Plasma 6** | Native Plasmoid (QML) | [`kde-plasmoid/`](kde-plasmoid/) |
 | **COSMIC** (System76) | Native Applet (Rust) | [`cosmic-applet/`](cosmic-applet/) |
+| **Cinnamon** (Linux Mint) | Native Applet (CJS) | [`cinnamon-applet/`](cinnamon-applet/) |
 | **Waybar** (Sway/Hyprland) | Python Script → JSON | [`universal-script/`](universal-script/) |
 | **Polybar** (i3/bspwm) | Python Script → Text | [`universal-script/`](universal-script/) |
 | **dwm** | Python Script → xsetroot | [`universal-script/`](universal-script/) |
 | **XFCE Genmon** | Python Script → Text | [`universal-script/`](universal-script/) |
+| **MATE Desktop** | Python Script → Text | [`universal-script/`](universal-script/) |
+| **macOS** (xbar/SwiftBar) | Python Script → xbar format | [`universal-script/`](universal-script/) |
 
 ---
 
@@ -105,7 +108,27 @@ cosmic-applet-ipl-score
 
 ---
 
-### 4. Waybar (Sway / Hyprland)
+### 4. Cinnamon Desktop Applet (Linux Mint)
+
+A native CJS applet for Linux Mint's Cinnamon desktop environment with a panel ticker, popup menu, and categorized match display.
+
+**Install from source:**
+```bash
+cp -r cinnamon-applet/ipl-live-score@amogh ~/.local/share/cinnamon/applets/
+```
+
+Then right-click your panel → **Add applets to the panel** → search for **"IPL Live Score"** → add it to your panel.
+
+**Uninstall:**
+```bash
+rm -rf ~/.local/share/cinnamon/applets/ipl-live-score@amogh
+```
+
+> **Note:** Uses CJS (CommonJS) imports — compatible with Cinnamon 5.4 through 6.4.
+
+---
+
+### 5. Waybar (Sway / Hyprland)
 
 Uses the zero-dependency Python script with Waybar's native JSON protocol. The tooltip shows all categorized matches.
 
@@ -121,7 +144,7 @@ Uses the zero-dependency Python script with Waybar's native JSON protocol. The t
 
 ---
 
-### 5. Polybar (i3 / bspwm)
+### 6. Polybar (i3 / bspwm)
 
 Uses the Python script in plain text mode. Polybar reads the first line as the module output.
 
@@ -135,7 +158,7 @@ interval = 60
 
 ---
 
-### 6. dwm
+### 7. dwm
 
 dwm's default status bar is set via `xsetroot -name`. The `--format dwm` flag outputs a clean single-line string designed for this.
 
@@ -154,7 +177,7 @@ while true; do xsetroot -name "$(python3 /path/to/ipl_score.py --format dwm)"; s
 
 ---
 
-### 7. XFCE Genmon
+### 8. XFCE Genmon
 
 Add a **"Generic Monitor"** panel item and set the command to:
 
@@ -163,6 +186,42 @@ python3 /path/to/universal-script/ipl_score.py --format text | head -1
 ```
 
 Set the refresh interval to 60 seconds.
+
+---
+
+### 9. macOS (xbar / SwiftBar)
+
+Uses the Python script with the `--format xbar` flag. Compatible with both [xbar](https://xbarapp.com/) and [SwiftBar](https://github.com/swiftbar/SwiftBar).
+
+**Setup:**
+
+1. Install xbar or SwiftBar on your Mac.
+2. Copy (or symlink) the script into your xbar plugins directory:
+```bash
+ln -sf /path/to/universal-script/ipl_score.py ~/Library/Application\ Support/xbar/plugins/ipl_score.60s.py
+chmod +x ~/Library/Application\ Support/xbar/plugins/ipl_score.60s.py
+```
+
+3. The `60s` in the filename tells xbar to refresh every 60 seconds.
+
+> **Features:** Active match on the menu bar, dropdown with categorized matches, and clickable links that open match pages in your browser.
+
+---
+
+### 10. MATE Desktop
+
+MATE's **Command Applet** displays the output of a shell command on the panel.
+
+**Setup:**
+
+1. Right-click the MATE panel → **Add to Panel** → **Command Applet**.
+2. Configure the command:
+```bash
+python3 /path/to/universal-script/ipl_score.py --format mate
+```
+3. Set the refresh interval to 60 seconds.
+
+> **Output:** A clean single-line string showing the highest-priority IPL match score.
 
 ---
 
@@ -190,7 +249,7 @@ is_finished  = Team2_runs > Team1_runs  OR  any team all out (wickets == 10)
 is_live      = has_asterisk AND NOT is_finished
 ```
 
-This logic is identically implemented across all six platforms — in JavaScript (GNOME/KDE), Python (universal script), and Rust (COSMIC).
+This logic is identically implemented across all platforms — in JavaScript (GNOME/KDE/Cinnamon), Python (universal script), and Rust (COSMIC).
 
 ---
 
@@ -212,7 +271,12 @@ This logic is identically implemented across all six platforms — in JavaScript
 │   ├── Cargo.toml
 │   └── src/main.rs
 │
-├── universal-script/              # Waybar / Polybar / dwm / XFCE (Python 3)
+├── cinnamon-applet/               # Cinnamon DE (CJS + Soup 3)
+│   └── ipl-live-score@amogh/
+│       ├── applet.js
+│       └── metadata.json
+│
+├── universal-script/              # Waybar / Polybar / dwm / XFCE / xbar / MATE (Python 3)
 │   └── ipl_score.py
 │
 └── README.md
@@ -227,10 +291,13 @@ This logic is identically implemented across all six platforms — in JavaScript
 | GNOME Shell | 45–50 | ✅ Supported |
 | KDE Plasma | 6.0+ | ✅ Supported |
 | COSMIC | Epoch 1.0+ | ✅ Supported |
+| Cinnamon | 5.4–6.4 | ✅ Supported |
 | Waybar | Any | ✅ Supported |
 | Polybar | Any | ✅ Supported |
 | dwm | Any | ✅ Supported |
 | XFCE (Genmon) | Any | ✅ Supported |
+| macOS (xbar/SwiftBar) | Any | ✅ Supported |
+| MATE Desktop | Any | ✅ Supported |
 
 ---
 
@@ -246,3 +313,5 @@ MIT
 - **GNOME**: [gjs.guide](https://gjs.guide/extensions/)
 - **KDE**: [Plasma Developer Documentation](https://develop.kde.org/docs/plasma/)
 - **COSMIC**: [System76 COSMIC](https://github.com/pop-os/cosmic-epoch)
+- **Cinnamon**: [Linux Mint Developer Guide](https://projects.linuxmint.com/reference/git/cinnamon-tutorials/write-applet.html)
+- **xbar**: [xbar Plugin API](https://github.com/matryer/xbar-plugins)
