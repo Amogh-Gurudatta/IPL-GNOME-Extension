@@ -24,3 +24,9 @@ Thumbs.db
 *.tar.gz
 *.tar.xz
 *.tar.bz2
+*.plasmoid
+
+# Build artifacts
+release/
+cosmic-applet/target/
+node_modules/

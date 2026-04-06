@@ -1,4 +1,4 @@
-.PHONY: help detect install install-gnome install-kde install-cinnamon install-mac install-cosmic install-script
+.PHONY: help detect install install-gnome install-kde install-cinnamon install-mac install-cosmic install-script package clean
 
 # Colors for terminal output
 BOLD := $(shell tput bold 2>/dev/null || echo '')
@@ -50,6 +50,10 @@ help:
 	@echo "  $(YELLOW)make install-mac$(RESET)       Install the macOS xbar/SwiftBar script."
 	@echo "  $(YELLOW)make install-script$(RESET)    Install the Universal Script (Waybar, Polybar, dwm, etc.)"
 	@echo ""
+	@echo "Release Management:"
+	@echo "  $(CYAN)make package$(RESET)           Generate ZIP packages for GitHub Releases."
+	@echo "  $(CYAN)make clean$(RESET)             Remove generated release packages."
+	@echo ""
 
 detect:
 	@echo "$(BOLD)Detected Environment:$(RESET)"
@@ -64,9 +68,9 @@ install: detect
 
 install-gnome:
 	@echo "$(CYAN)Installing GNOME extension...$(RESET)"
+	@glib-compile-schemas gnome-extension/schemas/
 	@cd gnome-extension && zip -qr ../ipl-live-score@amogh.shell-extension.zip *
 	@gnome-extensions install --force ipl-live-score@amogh.shell-extension.zip
-	@glib-compile-schemas ~/.local/share/gnome-shell/extensions/ipl-live-score@amogh/schemas/
 	@rm ipl-live-score@amogh.shell-extension.zip
 	@echo "$(GREEN)✅ GNOME Extension installed! Please log out or restart GNOME Shell to apply.$(RESET)"
 
@@ -108,3 +112,25 @@ install-script:
 	@echo "  $(YELLOW)dwm:$(RESET)      Add to .xinitrc: while true; do xsetroot -name \"$$(\~/.local/bin/ipl_score --format dwm)\"; sleep 60; done &"
 	@echo "  $(YELLOW)MATE:$(RESET)     Add Command Applet to panel and set command: ~/.local/bin/ipl_score --format mate"
 	@echo "  $(YELLOW)XFCE:$(RESET)     Add Generic Monitor and set command: ~/.local/bin/ipl_score --format text | head -1"
+
+package:
+	@echo "$(BOLD)📦 Packaging Release Assets...$(RESET)"
+	@mkdir -p release
+	@echo "$(CYAN)Packaging GNOME Extension...$(RESET)"
+	@glib-compile-schemas gnome-extension/schemas/
+	@cd gnome-extension && zip -qr ../release/ipl-live-score-gnome.zip *
+	@echo "$(CYAN)Packaging KDE Plasmoid...$(RESET)"
+	@cd kde-plasmoid && zip -qr ../release/ipl-live-score-kde.plasmoid *
+	@echo "$(CYAN)Packaging Cinnamon Applet...$(RESET)"
+	@cd cinnamon-applet && zip -qr ../release/ipl-live-score-cinnamon.zip ipl-live-score@amogh
+	@echo "$(CYAN)Packaging Universal Script...$(RESET)"
+	@cp universal-script/ipl_score.py release/
+	@echo "$(CYAN)Compiling COSMIC Applet Binary (This may take a moment)...$(RESET)"
+	@cd cosmic-applet && cargo build --release
+	@cp cosmic-applet/target/release/cosmic-applet-ipl-score release/
+	@echo "$(GREEN)✅ Release packages generated inside the 'release/' directory!$(RESET)"
+
+clean:
+	@echo "$(YELLOW)Cleaning up...$(RESET)"
+	@rm -rf release/ ipl-live-score@amogh.shell-extension.zip
+	@echo "$(GREEN)✅ Cleaned.$(RESET)"

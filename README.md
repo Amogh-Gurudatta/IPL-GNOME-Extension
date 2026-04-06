@@ -43,35 +43,51 @@ All platforms display matches dynamically sorted into:
 
 ## 🚀 Installation & Usage
 
-We provide a highly intelligent, auto-detecting `Makefile` that scans your OS and Desktop Environment to install the correct native version automatically.
-
-### 1-Click Install
+### Method 1: The Auto-Installer (Recommended)
+If you cloned this repository, we provide a highly intelligent, auto-detecting `Makefile` that scans your OS and Desktop Environment to install the correct native version automatically.
 
 Open a terminal in the project root and run:
-
 ```bash
 make install
 ```
+*This will evaluate your environment (`$XDG_CURRENT_DESKTOP`, `uname -s`, etc.) and automatically compile/install the correct widget.*
 
-*This will evaluate your environment (`$XDG_CURRENT_DESKTOP`, `uname -s`, etc.) and automatically compile/install the correct widget for GNOME, KDE, Cinnamon, COSMIC, macOS, or the fallback universal script.*
-
-### Verifying Auto-Detection
-
-To see what the Makefile detected without installing, run:
-```bash
-make detect
-```
-
-### Manual Overrides
-
-If you want to manually force an installation for a specific environment, you can run:
+#### Manual Overrides
+To force an installation for a specific environment, or view all installation options, run:
 ```bash
 make help
 ```
-Which lists out all the manual targets (`make install-gnome`, `make install-kde`, `make install-mac`, `make install-script`, etc.).
 
-#### Post-install notes for Window Managers (Waybar, Polybar, dwm, XFCE, MATE)
-If your environment triggers `make install-script` (or you run it manually), the universal Python script will be placed at `~/.local/bin/ipl_score`. The module output will print out exactly how to cleanly integrate it into your WM's config file via the format flags (e.g. `--format waybar`, `--format text`, etc.).
+---
+
+### Method 2: Manual Install from GitHub Releases
+If you downloaded the pre-packaged files from the **[Releases](https://github.com/Amogh-Gurudatta/IPL-Live-Score/releases)** page, follow these instructions based on the file you downloaded:
+
+- **GNOME (`ipl-live-score-gnome.zip`)**:
+  ```bash
+  gnome-extensions install ipl-live-score-gnome.zip
+  # Log out and log back in, then enable via GNOME Extensions app
+  ```
+
+- **KDE Plasma (`ipl-live-score-kde.plasmoid`)**:
+  ```bash
+  kpackagetool6 -i ipl-live-score-kde.plasmoid
+  # Add to your panel via the "Add Widgets" menu
+  ```
+
+- **Cinnamon (`ipl-live-score-cinnamon.zip`)**:
+  Extract the ZIP and place the isolated `ipl-live-score@amogh` folder directly into `~/.local/share/cinnamon/applets/`
+  
+- **COSMIC** (Source Build):
+  You will need to manually clone this repository and run `make install-cosmic` to build the applet locally, as COSMIC updates rapidly and binaries are hardware-dependent.
+
+#### Window Managers & macOS (`ipl_score.py`)
+If you downloaded the standalone **Universal Python Script**:
+Make the script executable (`chmod +x ipl_score.py`) and move it to `~/.local/bin/ipl_score`, then hook it into your bar:
+- **Waybar**: Add to config: `"custom/ipl": { "exec": "~/.local/bin/ipl_score --format waybar", "return-type": "json", "interval": 60 }`
+- **Polybar**: `exec = ~/.local/bin/ipl_score --format text | head -1`
+- **dwm**: `xsetroot -name "$(~/.local/bin/ipl_score --format dwm)"`
+- **macOS xbar**: Copy the script into `~/Library/Application Support/xbar/plugins/ipl_score.1m.py` and ensure the `.1m.py` suffix is intact.
 
 ---
 
