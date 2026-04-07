@@ -143,22 +143,29 @@ export default class IplLiveScoreExtension extends Extension {
         }
     }
 
-    _adjustPollingRate(ongoingMatches, scheduledMatches) {
+    _adjustPollingRate(iplMatches) {
         const activeInterval = this._settings?.get_int('refresh-interval') ?? 60;
-        const idleInterval = 3600;
+        const idleInterval = 3600; // 1 hour deep sleep
         const hour = new Date().getHours();
-        
-        let nextInterval;
-        
-        if (ongoingMatches.length > 0 || scheduledMatches.length > 0) {
+
+        // A match is happening if it has scores (hasStarted) but our math says it isn't over (!isFinished)
+        const isMatchInProgress = iplMatches.some(m => m.hasStarted && !m.isFinished);
+
+        let nextInterval = idleInterval; // Default to sleep
+
+        if (isMatchInProgress) {
+            // Lock onto 60s if any match is actively being played (or in innings break)
             nextInterval = activeInterval;
-        } else if (hour === 15 || hour === 19) {
+        } else if (hour === 15) {
+            // 3:00 PM - 3:59 PM: Wake up to hunt for an afternoon double-header toss
             nextInterval = activeInterval;
-        } else {
-            nextInterval = idleInterval;
+        } else if (hour >= 19 && hour <= 23) {
+            // 7:00 PM - 11:59 PM: Wake up and track the main evening match
+            nextInterval = activeInterval;
         }
-        
+
         if (this._currentInterval !== nextInterval) {
+            console.log(`[IPL Live Score] Polling Engine shifted to ${nextInterval}s interval`);
             this._stopPolling();
             this._startPolling(nextInterval);
         }
@@ -345,7 +352,7 @@ export default class IplLiveScoreExtension extends Extension {
 
                         if (iplMatches.length === 0) {
                             this._buildFallbackMenu('🏏 IPL: No Live Matches');
-                            this._adjustPollingRate([], []);
+                            this._adjustPollingRate([]);
                             return;
                         }
 
@@ -481,9 +488,7 @@ export default class IplLiveScoreExtension extends Extension {
                         menu.addMenuItem(refreshItem);
 
                         // Use the entire list of matches to evaluate the polling engine state
-                        const allOngoing = iplMatches.filter(m => m.isLive);
-                        const allScheduled = iplMatches.filter(m => !m.hasStarted);
-                        this._adjustPollingRate(allOngoing, allScheduled);
+                        this._adjustPollingRate(iplMatches);
 
                     } catch (innerError) {
                         console.error('[IPL Live Score] Response error:', innerError.message);

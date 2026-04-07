@@ -14,7 +14,7 @@ PlasmoidItem {
     // -----------------------------------------------------------------------
 
     readonly property string rssUrl: "http://static.cricinfo.com/rss/livescores.xml"
-    readonly property int pollInterval: 60000  // 60 seconds
+    property int pollInterval: 3600000  // Initial defaults to Deep Sleep (1 hour)
 
     readonly property var iplTeams: ({
         "Chennai Super Kings": "CSK",
@@ -325,6 +325,21 @@ PlasmoidItem {
             root.ongoingMatches = ongoing;
             root.completedMatches = completed;
             root.scheduledMatches = scheduled;
+
+            // --- Smart Polling Logic ---
+            var isMatchInProgress = false;
+            for (var mIdx = 0; mIdx < iplMatches.length; mIdx++) {
+                if (iplMatches[mIdx].hasStarted && !iplMatches[mIdx].isFinished) {
+                    isMatchInProgress = true;
+                    break;
+                }
+            }
+            var hour = new Date().getHours();
+            if (isMatchInProgress || hour === 15 || (hour >= 19 && hour <= 23)) {
+                root.pollInterval = 60000;
+            } else {
+                root.pollInterval = 3600000;
+            }
         };
 
         xhr.open("GET", root.rssUrl);

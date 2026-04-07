@@ -3,6 +3,7 @@
 // A native System76 COSMIC panel applet that streams live IPL cricket scores.
 // Uses ureq for blocking HTTP, regex for XML parsing, and libcosmic for the UI.
 
+use chrono::Timelike;
 use cosmic_applet::CosmicApplet;
 use iced::widget::{button, column, container, horizontal_rule, row, scrollable, text};
 use iced::{self, Alignment, Application, Command, Element, Length, Subscription, Theme};
@@ -16,7 +17,6 @@ use std::time::Duration;
 // ---------------------------------------------------------------------------
 
 const RSS_URL: &str = "http://static.cricinfo.com/rss/livescores.xml";
-const POLL_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Full team name → abbreviation mapping.
 static IPL_TEAMS: Lazy<Vec<(&str, &str)>> = Lazy::new(|| {
@@ -67,6 +67,7 @@ struct FeedData {
     ongoing: Vec<String>,
     completed: Vec<String>,
     scheduled: Vec<String>,
+    is_match_in_progress: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -185,11 +186,16 @@ fn fetch_and_parse() -> Option<FeedData> {
         }
     }
 
+    let is_match_in_progress = ipl_matches
+        .iter()
+        .any(|m| m.has_started && !m.is_finished);
+
     Some(FeedData {
         active_match: active_title,
         ongoing,
         completed,
         scheduled,
+        is_match_in_progress,
     })
 }
 
@@ -210,6 +216,7 @@ struct IplScoreApplet {
     data: FeedData,
     popup_open: bool,
     loading: bool,
+    poll_interval: Duration,
 }
 
 impl Application for IplScoreApplet {
@@ -227,6 +234,7 @@ impl Application for IplScoreApplet {
             },
             popup_open: false,
             loading: true,
+            poll_interval: Duration::from_secs(3600), // Default to 1 hour deep sleep
         };
 
         // Immediately fetch on startup
@@ -251,7 +259,29 @@ impl Application for IplScoreApplet {
                     self.data = feed_data;
                 } else {
                     self.data.active_match = "🏏 IPL: Offline".into();
+                    self.data.is_match_in_progress = false;
                 }
+
+                // Smart Polling Math
+                let hour = chrono::Local::now().hour();
+                let active_interval = Duration::from_secs(60);
+                let idle_interval = Duration::from_secs(3600);
+
+                let next_interval = if self.data.is_match_in_progress {
+                    active_interval
+                } else if hour == 15 {
+                    active_interval
+                } else if (19..=23).contains(&hour) {
+                    active_interval
+                } else {
+                    idle_interval
+                };
+
+                if self.poll_interval != next_interval {
+                    println!("[IPL Live Score] Polling Engine shifted to {}s interval", next_interval.as_secs());
+                    self.poll_interval = next_interval;
+                }
+
                 Command::none()
             }
             Message::TogglePopup => {
@@ -266,7 +296,7 @@ impl Application for IplScoreApplet {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        iced::time::every(POLL_INTERVAL).map(|_| Message::Tick)
+        iced::time::every(self.poll_interval).map(|_| Message::Tick)
     }
 
     fn view(&self) -> Element<Message> {

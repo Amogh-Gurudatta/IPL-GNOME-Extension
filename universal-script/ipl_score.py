@@ -16,9 +16,12 @@ dwm usage (add to .xinitrc):
 """
 
 import argparse
+import datetime
 import json
+import os
 import re
 import sys
+import time
 import urllib.request
 from xml.etree import ElementTree
 
@@ -147,6 +150,7 @@ def fetch_and_parse():
             "ongoing": [],
             "completed": [],
             "scheduled": [],
+            "is_match_in_progress": False,
         }
 
     # Reverse so newest matches come first
@@ -165,12 +169,15 @@ def fetch_and_parse():
     completed = [{"title": m["title"], "link": m["link"]} for m in others if m["is_finished"]]
     scheduled = [{"title": m["title"], "link": m["link"]} for m in others if not m["has_started"]]
 
+    is_match_in_progress = any(m["has_started"] and not m["is_finished"] for m in ipl_matches)
+
     return {
         "active_match": active["title"],
         "active_link": active["link"],
         "ongoing": ongoing,
         "completed": completed,
         "scheduled": scheduled,
+        "is_match_in_progress": is_match_in_progress,
     }
 
 
@@ -324,34 +331,85 @@ def main():
     )
     args = parser.parse_args()
 
-    data = fetch_and_parse()
+    # -----------------------------------------------------------------------
+    # Gatekeeper Logic / Smart Caching
+    # -----------------------------------------------------------------------
+    CACHE_FILE = os.path.expanduser("~/.cache/ipl_score_cache.json")
+    
+    current_time = time.time()
+    current_hour = datetime.datetime.now().hour
 
-    if data is None:
-        if args.format == "waybar":
-            print(json.dumps({
-                "text": "🏏 IPL: Offline",
-                "tooltip": "Network error — could not reach Cricinfo RSS feed",
-                "class": "offline",
-            }))
-        elif args.format == "xbar":
-            print("🏏 IPL: Offline")
-            print("---")
-            print("Network error | color=red")
-            print("---")
-            print("Refresh | refresh=true")
-        else:
-            print("🏏 IPL: Offline")
-        sys.exit(0)
+    fetch_live = True
 
-    formatters = {
-        "waybar": format_waybar,
-        "text": format_text,
-        "dwm": format_dwm,
-        "xbar": format_xbar,
-        "mate": format_mate,
-    }
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r") as f:
+                cache = json.load(f)
 
-    print(formatters[args.format](data))
+            cache_age = current_time - cache.get("timestamp", 0)
+            is_match = cache.get("isMatchInProgress", False)
+            outputs = cache.get("outputs", {})
+
+            if is_match:
+                fetch_live = True
+            elif current_hour == 15 or 19 <= current_hour <= 23:
+                fetch_live = True
+            elif cache_age < 3600:
+                if args.format in outputs:
+                    print(outputs[args.format])
+                    sys.exit(0)
+            else:
+                fetch_live = True
+        except Exception:
+            fetch_live = True
+
+    # -----------------------------------------------------------------------
+    # Core Logic
+    # -----------------------------------------------------------------------
+    if fetch_live:
+        data = fetch_and_parse()
+
+        if data is None:
+            if args.format == "waybar":
+                print(json.dumps({
+                    "text": "🏏 IPL: Offline",
+                    "tooltip": "Network error — could not reach Cricinfo RSS feed",
+                    "class": "offline",
+                }))
+            elif args.format == "xbar":
+                print("🏏 IPL: Offline\n---\nNetwork error | color=red\n---\nRefresh | refresh=true")
+            else:
+                print("🏏 IPL: Offline")
+            sys.exit(0)
+
+        formatters = {
+            "waybar": format_waybar,
+            "text": format_text,
+            "dwm": format_dwm,
+            "xbar": format_xbar,
+            "mate": format_mate,
+        }
+
+        # Pre-render all formats
+        rendered_outputs = {fmt: func(data) for fmt, func in formatters.items()}
+
+        # -------------------------------------------------------------------
+        # Save to Cache
+        # -------------------------------------------------------------------
+        cache_data = {
+            "timestamp": current_time,
+            "isMatchInProgress": data["is_match_in_progress"],
+            "outputs": rendered_outputs
+        }
+        
+        try:
+            os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
+            with open(CACHE_FILE, "w") as f:
+                json.dump(cache_data, f)
+        except Exception:
+            pass # Failsafe if ~/.cache is read-only or similar
+            
+        print(rendered_outputs[args.format])
 
 
 if __name__ == "__main__":

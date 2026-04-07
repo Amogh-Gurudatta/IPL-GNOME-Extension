@@ -22,7 +22,6 @@ const ByteArray = imports.byteArray;
 // ---------------------------------------------------------------------------
 
 const RSS_URL = "http://static.cricinfo.com/rss/livescores.xml";
-const POLL_INTERVAL_SECS = 60;
 
 const IPL_TEAMS = {
     "Chennai Super Kings": "CSK",
@@ -117,6 +116,7 @@ class IplLiveScoreApplet extends Applet.TextIconApplet {
 
         // Polling
         this._timeoutId = null;
+        this._currentInterval = 3600;
 
         // Initial fetch
         this._fetchScore();
@@ -143,9 +143,33 @@ class IplLiveScoreApplet extends Applet.TextIconApplet {
     // Polling
     // -----------------------------------------------------------------------
 
+    _adjustPollingRate(iplMatches) {
+        const activeInterval = 60;
+        const idleInterval = 3600; // 1 hour deep sleep
+        const hour = new Date().getHours();
+
+        const isMatchInProgress = iplMatches.some(m => m.hasStarted && !m.isFinished);
+        let nextInterval = idleInterval;
+
+        if (isMatchInProgress) {
+            nextInterval = activeInterval;
+        } else if (hour === 15) {
+            nextInterval = activeInterval;
+        } else if (hour >= 19 && hour <= 23) {
+            nextInterval = activeInterval;
+        }
+
+        if (this._currentInterval !== nextInterval) {
+            global.log(`[IPL Live Score] Polling Engine shifted to ${nextInterval}s interval`);
+            this._currentInterval = nextInterval;
+            this._stopPolling();
+            this._startPolling();
+        }
+    }
+
     _startPolling() {
         this._stopPolling();
-        this._timeoutId = Mainloop.timeout_add_seconds(POLL_INTERVAL_SECS, () => {
+        this._timeoutId = Mainloop.timeout_add_seconds(this._currentInterval, () => {
             this._fetchScore();
             return GLib.SOURCE_CONTINUE;
         });
@@ -180,6 +204,8 @@ class IplLiveScoreApplet extends Applet.TextIconApplet {
         let refreshItem = new PopupMenu.PopupMenuItem("🔄 Refresh Now");
         refreshItem.connect("activate", () => this._manualRefresh());
         this.menu.addMenuItem(refreshItem);
+
+        this._adjustPollingRate([]);
     }
 
     // -----------------------------------------------------------------------
@@ -389,6 +415,9 @@ class IplLiveScoreApplet extends Applet.TextIconApplet {
         let refreshItem = new PopupMenu.PopupMenuItem("🔄 Refresh Now");
         refreshItem.connect("activate", () => this._manualRefresh());
         this.menu.addMenuItem(refreshItem);
+
+        // --- Smart Polling Adjustment ---
+        this._adjustPollingRate(iplMatches);
     }
 }
 
