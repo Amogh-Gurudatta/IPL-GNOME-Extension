@@ -108,8 +108,10 @@ If you downloaded the standalone **Universal Python Script**:
    - **Waybar**: Add to your config: `"custom/ipl": { "exec": "~/.local/bin/ipl_score --format waybar", "return-type": "json", "interval": 60 }`
    - **Polybar**: `exec = ~/.local/bin/ipl_score --format text | head -1`
    - **dwm**: `xsetroot -name "$(~/.local/bin/ipl_score --format dwm)"`
-   - **macOS xbar**: Move the script into your plugins directory and ensure the `.1m.py` suffix is intact for a 1-minute refresh rate:
+   - **macOS xbar**: Ensure you have installed **[xbar](https://xbarapp.com/)** first. You can do this via Homebrew:
      ```bash
+     brew install --cask xbar
+     mkdir -p ~/Library/Application\ Support/xbar/plugins/
      mv ~/.local/bin/ipl_score ~/Library/Application\ Support/xbar/plugins/ipl_score.1m.py
      ```
 

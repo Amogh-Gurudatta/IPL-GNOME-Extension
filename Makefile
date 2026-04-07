@@ -93,7 +93,18 @@ install-cosmic:
 	@echo "$(GREEN)✅ COSMIC Applet installed to ~/.local/bin/cosmic-applet-ipl-score!$(RESET)"
 
 install-mac:
-	@echo "$(CYAN)Installing macOS xbar Script...$(RESET)"
+	@echo "$(CYAN)Checking for macOS menu bar app...$(RESET)"
+	@if [ ! -d "/Applications/xbar.app" ] && [ ! -d "$$HOME/Applications/xbar.app" ] && [ ! -d "/Applications/SwiftBar.app" ] && [ ! -d "$$HOME/Applications/SwiftBar.app" ]; then \
+		echo "$(YELLOW)⚠️ Neither xbar nor SwiftBar was found in Applications.$(RESET)"; \
+		if command -v brew >/dev/null 2>&1; then \
+			echo "$(CYAN)Auto-installing xbar via Homebrew...$(RESET)"; \
+			brew install --cask xbar; \
+		else \
+			echo "$(YELLOW)❌ Please install xbar manually from https://xbarapp.com/ before continuing.$(RESET)"; \
+			exit 1; \
+		fi; \
+	fi
+	@echo "$(CYAN)Installing macOS Script...$(RESET)"
 	@mkdir -p ~/Library/Application\ Support/xbar/plugins/
 	@cp universal-script/ipl_score.py ~/Library/Application\ Support/xbar/plugins/ipl_score.1m.py
 	@chmod +x ~/Library/Application\ Support/xbar/plugins/ipl_score.1m.py
