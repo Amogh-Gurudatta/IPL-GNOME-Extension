@@ -13,8 +13,9 @@ PlasmoidItem {
     // Constants
     // -----------------------------------------------------------------------
 
-    readonly property string rssUrl: "http://static.cricinfo.com/rss/livescores.xml"
-    property int pollInterval: 3600000  // Initial defaults to Deep Sleep (1 hour)
+    readonly property string apiUrl: "https://site.api.espn.com/apis/personalized/v2/scoreboard/header?sport=cricket"
+    readonly property string cricinfoLive: "https://www.espncricinfo.com/live-cricket-scores"
+    property int pollInterval: 3600000
 
     readonly property var iplTeams: ({
         "Chennai Super Kings": "CSK",
@@ -35,9 +36,7 @@ PlasmoidItem {
     // -----------------------------------------------------------------------
 
     property string activeMatchText: "🏏 Loading IPL..."
-    property var ongoingMatches: []
-    property var completedMatches: []
-    property var scheduledMatches: []
+    property var matchCards: []   // Array of {venue, matchNum, scoreLine, context, isLive, link}
 
     // -----------------------------------------------------------------------
     // Compact Representation (panel bar text)
@@ -56,15 +55,15 @@ PlasmoidItem {
     }
 
     // -----------------------------------------------------------------------
-    // Full Representation (expanded popup)
+    // Full Representation (expanded popup with Scorecards)
     // -----------------------------------------------------------------------
 
     fullRepresentation: ColumnLayout {
         spacing: Kirigami.Units.smallSpacing
-        Layout.preferredWidth: Kirigami.Units.gridUnit * 22
+        Layout.preferredWidth: Kirigami.Units.gridUnit * 24
         Layout.preferredHeight: implicitHeight
         Layout.minimumHeight: Kirigami.Units.gridUnit * 8
-        Layout.maximumHeight: Kirigami.Units.gridUnit * 30
+        Layout.maximumHeight: Kirigami.Units.gridUnit * 35
 
         // Active match header
         PlasmaComponents.Label {
@@ -76,7 +75,6 @@ PlasmoidItem {
             horizontalAlignment: Text.AlignHCenter
         }
 
-        // Separator
         Rectangle {
             Layout.fillWidth: true
             height: 1
@@ -84,88 +82,90 @@ PlasmoidItem {
             opacity: 0.3
         }
 
-        // Scrollable match list
+        // Scrollable scorecard list
         QQC2.ScrollView {
             Layout.fillWidth: true
             Layout.fillHeight: true
 
             ColumnLayout {
                 width: parent.width
-                spacing: Kirigami.Units.smallSpacing
+                spacing: 0
 
-                // --- ONGOING ---
                 Repeater {
-                    model: root.ongoingMatches.length > 0 ? 1 : 0
-                    PlasmaComponents.Label {
-                        text: "🔴 ONGOING"
-                        font.bold: true
-                        font.pixelSize: Kirigami.Theme.defaultFont.pixelSize * 0.9
-                        color: Kirigami.Theme.disabledTextColor
-                        Layout.fillWidth: true
-                        Layout.topMargin: Kirigami.Units.smallSpacing
-                    }
-                }
-                Repeater {
-                    model: root.ongoingMatches
-                    PlasmaComponents.Label {
-                        text: "  " + modelData
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                    }
-                }
+                    model: root.matchCards
 
-                // --- COMPLETED ---
-                Repeater {
-                    model: root.completedMatches.length > 0 ? 1 : 0
-                    PlasmaComponents.Label {
-                        text: "✅ COMPLETED"
-                        font.bold: true
-                        font.pixelSize: Kirigami.Theme.defaultFont.pixelSize * 0.9
-                        color: Kirigami.Theme.disabledTextColor
+                    // Each Scorecard
+                    delegate: Item {
                         Layout.fillWidth: true
-                        Layout.topMargin: Kirigami.Units.smallSpacing
-                    }
-                }
-                Repeater {
-                    model: root.completedMatches
-                    PlasmaComponents.Label {
-                        text: "  " + modelData
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                    }
-                }
+                        implicitHeight: cardColumn.implicitHeight + separator.height + Kirigami.Units.smallSpacing * 2
 
-                // --- SCHEDULED ---
-                Repeater {
-                    model: root.scheduledMatches.length > 0 ? 1 : 0
-                    PlasmaComponents.Label {
-                        text: "📅 SCHEDULED"
-                        font.bold: true
-                        font.pixelSize: Kirigami.Theme.defaultFont.pixelSize * 0.9
-                        color: Kirigami.Theme.disabledTextColor
-                        Layout.fillWidth: true
-                        Layout.topMargin: Kirigami.Units.smallSpacing
-                    }
-                }
-                Repeater {
-                    model: root.scheduledMatches
-                    PlasmaComponents.Label {
-                        text: "  " + modelData
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
+                        ColumnLayout {
+                            id: cardColumn
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: Kirigami.Units.smallSpacing
+                            spacing: 2
+
+                            // Line 1: Venue + Match Num (small, grey)
+                            PlasmaComponents.Label {
+                                text: modelData.venueLine || ""
+                                visible: modelData.venueLine !== ""
+                                font.pixelSize: Kirigami.Theme.defaultFont.pixelSize * 0.85
+                                color: Kirigami.Theme.disabledTextColor
+                                Layout.fillWidth: true
+                                wrapMode: Text.WordWrap
+                            }
+
+                            // Line 2: Score (bold, large)
+                            PlasmaComponents.Label {
+                                text: modelData.scoreLine
+                                font.bold: true
+                                font.pixelSize: Kirigami.Theme.defaultFont.pixelSize * 1.1
+                                Layout.fillWidth: true
+                                wrapMode: Text.WordWrap
+                            }
+
+                            // Line 3: Context (red+bold if live, grey otherwise)
+                            PlasmaComponents.Label {
+                                text: modelData.contextLine || ""
+                                visible: modelData.contextLine !== ""
+                                font.bold: modelData.isLive
+                                font.pixelSize: Kirigami.Theme.defaultFont.pixelSize * 0.95
+                                color: modelData.isLive ? "#FF4444" : Kirigami.Theme.disabledTextColor
+                                Layout.fillWidth: true
+                                wrapMode: Text.WordWrap
+                            }
+                        }
+
+                        // Separator
+                        Rectangle {
+                            id: separator
+                            anchors.bottom: parent.bottom
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            height: 1
+                            color: Kirigami.Theme.disabledTextColor
+                            opacity: 0.2
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: Qt.openUrlExternally(modelData.link || root.cricinfoLive)
+                        }
                     }
                 }
 
                 // No matches fallback
                 Repeater {
-                    model: (root.ongoingMatches.length === 0 &&
-                            root.completedMatches.length === 0 &&
-                            root.scheduledMatches.length === 0) ? 1 : 0
+                    model: root.matchCards.length === 0 ? 1 : 0
                     PlasmaComponents.Label {
-                        text: "No other IPL matches"
+                        text: "No IPL matches found"
                         color: Kirigami.Theme.disabledTextColor
                         Layout.fillWidth: true
                         horizontalAlignment: Text.AlignHCenter
+                        Layout.topMargin: Kirigami.Units.gridUnit
                     }
                 }
             }
@@ -192,82 +192,41 @@ PlasmoidItem {
     }
 
     // -----------------------------------------------------------------------
-    // Core Logic (JS)
+    // Data helpers (JS)
     // -----------------------------------------------------------------------
 
-    function isMatchFinished(title) {
-        var scoreRegex = /\b(\d+)\/(\d+)\b/g;
-        var scores = [];
-        var m;
-        while ((m = scoreRegex.exec(title)) !== null) {
-            scores.push({ runs: parseInt(m[1], 10), wkts: parseInt(m[2], 10) });
-        }
-
-        if (scores.length < 2) return false;
-
-        if (scores[1].runs > scores[0].runs) return true;
-        if (scores[0].wkts === 10 || scores[1].wkts === 10) return true;
-
-        return false;
-    }
-
-    function shortenTitle(title) {
-        var result = title;
+    function getTeamAbbr(displayName, apiAbbr) {
         var keys = Object.keys(root.iplTeams);
         for (var i = 0; i < keys.length; i++) {
-            // Global replace without regex — split and join
-            result = result.split(keys[i]).join(root.iplTeams[keys[i]]);
+            if (keys[i] === displayName) return root.iplTeams[keys[i]];
         }
-        return result;
+        return apiAbbr || displayName;
     }
 
-    function parseXml(xmlText) {
-        // Extract all <item> blocks using regex (QML has no DOMParser)
-        var matchRegex = /<item>[\s\S]*?<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>[\s\S]*?<\/item>/gi;
-        var teamNames = Object.keys(root.iplTeams);
+    function extractMatchNum(description) {
+        var m = (description || "").match(/^([\w\d]+(?:st|nd|rd|th)?\s+Match(?:\s*\([A-Z]\))?)/);
+        return m ? m[1] : "";
+    }
 
-        var iplMatches = [];
-        var execResult;
+    function buildPanelText(competitors) {
+        if (competitors.length < 2) return null;
 
-        while ((execResult = matchRegex.exec(xmlText)) !== null) {
-            var titleText = execResult[1] || "";
-
-            // Skip generic channel title
-            if (titleText.indexOf("Cricinfo Live Scores") !== -1 || titleText.trim() === "")
-                continue;
-
-            // Filter: must contain an IPL team
-            var isIpl = false;
-            for (var i = 0; i < teamNames.length; i++) {
-                if (titleText.indexOf(teamNames[i]) !== -1) {
-                    isIpl = true;
-                    break;
-                }
-            }
-            if (!isIpl) continue;
-
-            // Shorten team names
-            var shortened = shortenTitle(titleText);
-
-            // Smart State Math
-            var hasAsterisk = shortened.indexOf("*") !== -1;
-            var hasStarted = /\d/.test(shortened);
-            var finished = isMatchFinished(shortened);
-            var isLive = hasAsterisk && !finished;
-
-            // Replace '*' with 🏏 for display
-            var displayTitle = shortened.split("*").join("🏏");
-
-            iplMatches.push({
-                title: displayTitle,
-                isLive: isLive,
-                hasStarted: hasStarted,
-                isFinished: finished
-            });
+        var parts = [];
+        for (var i = 0; i < competitors.length; i++) {
+            var comp = competitors[i];
+            var displayName = comp.displayName || "";
+            var apiAbbr = comp.abbreviation || comp.name || "";
+            var abbr = getTeamAbbr(displayName, apiAbbr);
+            var score = comp.score || "";
+            parts.push(score ? abbr + " " + score : abbr);
         }
 
-        return iplMatches;
+        return parts.join(" v ");
     }
+
+    // -----------------------------------------------------------------------
+    // Network: ESPN Core API
+    // -----------------------------------------------------------------------
 
     function fetchScores() {
         var xhr = new XMLHttpRequest();
@@ -276,74 +235,152 @@ PlasmoidItem {
 
             if (xhr.status !== 200) {
                 root.activeMatchText = "🏏 IPL: Offline";
-                root.ongoingMatches = [];
-                root.completedMatches = [];
-                root.scheduledMatches = [];
-                return;
-            }
-
-            var iplMatches = parseXml(xhr.responseText);
-
-            if (iplMatches.length === 0) {
-                root.activeMatchText = "🏏 IPL: No Live Matches";
-                root.ongoingMatches = [];
-                root.completedMatches = [];
-                root.scheduledMatches = [];
-                return;
-            }
-
-            // Reverse so newest matches come first
-            iplMatches.reverse();
-
-            // Priority Selector: Live > Started > Scheduled
-            var active = null;
-            for (var i = 0; i < iplMatches.length; i++) {
-                if (iplMatches[i].isLive) { active = iplMatches[i]; break; }
-            }
-            if (!active) {
-                for (var j = 0; j < iplMatches.length; j++) {
-                    if (iplMatches[j].hasStarted) { active = iplMatches[j]; break; }
-                }
-            }
-            if (!active) {
-                active = iplMatches[0];
-            }
-
-            root.activeMatchText = "🏏 " + active.title;
-
-            // Categorize remaining matches
-            var ongoing = [], completed = [], scheduled = [];
-            for (var k = 0; k < iplMatches.length; k++) {
-                var m = iplMatches[k];
-                if (m === active) continue;
-
-                if (m.isLive) ongoing.push(m.title);
-                else if (m.isFinished) completed.push(m.title);
-                else if (!m.hasStarted) scheduled.push(m.title);
-            }
-
-            root.ongoingMatches = ongoing;
-            root.completedMatches = completed;
-            root.scheduledMatches = scheduled;
-
-            // --- Smart Polling Logic ---
-            var isMatchInProgress = false;
-            for (var mIdx = 0; mIdx < iplMatches.length; mIdx++) {
-                if (iplMatches[mIdx].hasStarted && !iplMatches[mIdx].isFinished) {
-                    isMatchInProgress = true;
-                    break;
-                }
-            }
-            var hour = new Date().getHours();
-            if (isMatchInProgress || hour === 15 || (hour >= 19 && hour <= 23)) {
-                root.pollInterval = 60000;
-            } else {
+                root.matchCards = [];
                 root.pollInterval = 3600000;
+                return;
             }
+
+            var apiData;
+            try {
+                apiData = JSON.parse(xhr.responseText);
+            } catch (e) {
+                root.activeMatchText = "🏏 IPL: Offline";
+                root.matchCards = [];
+                root.pollInterval = 3600000;
+                return;
+            }
+
+            processApiData(apiData);
         };
 
-        xhr.open("GET", root.rssUrl);
+        xhr.open("GET", root.apiUrl);
+        xhr.setRequestHeader("User-Agent", "Mozilla/5.0");
         xhr.send();
+    }
+
+    function processApiData(apiData) {
+        var leagues;
+        try {
+            leagues = apiData.sports[0].leagues;
+        } catch (e) {
+            root.activeMatchText = "🏏 IPL: No Live Matches";
+            root.matchCards = [];
+            root.pollInterval = 3600000;
+            return;
+        }
+
+        if (!leagues || !leagues.length) {
+            root.activeMatchText = "🏏 IPL: No Live Matches";
+            root.matchCards = [];
+            root.pollInterval = 3600000;
+            return;
+        }
+
+        var teamNames = Object.keys(root.iplTeams);
+        var iplMatches = [];
+
+        for (var l = 0; l < leagues.length; l++) {
+            var events = leagues[l].events || [];
+            for (var e = 0; e < events.length; e++) {
+                var event = events[e];
+                var eventName = event.name || "";
+
+                var hasIplTeam = false;
+                for (var t = 0; t < teamNames.length; t++) {
+                    if (eventName.indexOf(teamNames[t]) !== -1) {
+                        hasIplTeam = true;
+                        break;
+                    }
+                }
+                if (!hasIplTeam) continue;
+
+                var competitors = event.competitors || [];
+                if (competitors.length < 2) continue;
+
+                var fullStatus = event.fullStatus || {};
+                var statusType = fullStatus.type || {};
+                var state = statusType.state || "";
+                var statusDetail = statusType.detail || "";
+
+                var isLive = state === "in";
+                var hasStarted = state === "in" || state === "post";
+                var isFinished = state === "post";
+
+                var venue = event.location || "";
+                var description = event.description || "";
+                var matchNum = extractMatchNum(description);
+                var context = fullStatus.summary || statusDetail;
+                var link = event.link || root.cricinfoLive;
+
+                var panelText = buildPanelText(competitors);
+                if (!panelText) continue;
+
+                // Build scorecard data
+                var venueLine = "";
+                if (venue) venueLine = "🏟️ " + venue;
+                if (matchNum) {
+                    venueLine += venueLine ? " • " + matchNum : "🏟️ " + matchNum;
+                }
+
+                var comp0Abbr = getTeamAbbr(competitors[0].displayName || "", competitors[0].abbreviation || competitors[0].name || "");
+                var comp1Abbr = getTeamAbbr(competitors[1].displayName || "", competitors[1].abbreviation || competitors[1].name || "");
+                var comp0Score = competitors[0].score || "";
+                var comp1Score = competitors[1].score || "";
+                var t1 = (comp0Abbr + " " + comp0Score).trim();
+                var t2 = (comp1Abbr + " " + comp1Score).trim();
+                var scoreLine = "🏏 " + t1 + " v " + t2;
+
+                var contextLine = context ? "👉 " + context : "";
+
+                iplMatches.push({
+                    panelText: panelText,
+                    venueLine: venueLine,
+                    scoreLine: scoreLine,
+                    contextLine: contextLine,
+                    isLive: isLive,
+                    hasStarted: hasStarted,
+                    isFinished: isFinished,
+                    link: link
+                });
+            }
+        }
+
+        if (iplMatches.length === 0) {
+            root.activeMatchText = "🏏 IPL: No Live Matches";
+            root.matchCards = [];
+            root.pollInterval = 3600000;
+            return;
+        }
+
+        // Priority Selector
+        var active = null;
+        for (var i = 0; i < iplMatches.length; i++) {
+            if (iplMatches[i].isLive) { active = iplMatches[i]; break; }
+        }
+        if (!active) {
+            for (var j = 0; j < iplMatches.length; j++) {
+                if (iplMatches[j].hasStarted) { active = iplMatches[j]; break; }
+            }
+        }
+        if (!active) active = iplMatches[0];
+
+        root.activeMatchText = "🏏 " + active.panelText;
+        root.matchCards = iplMatches;
+
+        // Smart Polling with Jitter
+        var isMatchInProgress = false;
+        for (var mIdx = 0; mIdx < iplMatches.length; mIdx++) {
+            if (iplMatches[mIdx].hasStarted && !iplMatches[mIdx].isFinished) {
+                isMatchInProgress = true;
+                break;
+            }
+        }
+        var hour = new Date().getHours();
+        if (isMatchInProgress || hour === 15 || (hour >= 19 && hour <= 23)) {
+            root.pollInterval = (Math.floor(Math.random() * 21) + 55) * 1000;
+        } else {
+            root.pollInterval = 3600000;
+        }
     }
 
     // -----------------------------------------------------------------------

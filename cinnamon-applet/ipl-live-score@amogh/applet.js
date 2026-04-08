@@ -1,7 +1,5 @@
-// IPL Live Score — Cinnamon Desktop Applet (CJS)
-//
-// A native panel applet for Linux Mint's Cinnamon DE that streams
-// live IPL cricket scores with smart state detection.
+// IPL Live Score — Cinnamon Desktop Applet (v3.0.0)
+// Data source: ESPN Core API (unprotected, no WAF).
 //
 // CRITICAL: Uses CJS-style imports (NOT GJS/ESM).
 
@@ -21,7 +19,8 @@ const ByteArray = imports.byteArray;
 // Constants
 // ---------------------------------------------------------------------------
 
-const RSS_URL = "http://static.cricinfo.com/rss/livescores.xml";
+const API_URL = "https://site.api.espn.com/apis/personalized/v2/scoreboard/header?sport=cricket";
+const CRICINFO_LIVE = "https://www.espncricinfo.com/live-cricket-scores";
 
 const IPL_TEAMS = {
     "Chennai Super Kings": "CSK",
@@ -40,52 +39,100 @@ const IPL_TEAMS = {
 const TEAM_NAMES = Object.keys(IPL_TEAMS);
 
 // ---------------------------------------------------------------------------
-// Core Logic (Pure Functions)
+// Data helpers (Pure Functions)
 // ---------------------------------------------------------------------------
 
-/**
- * Determine whether a match has finished based on the score string.
- *
- * Rules:
- *   - If the chasing team's runs exceed the first team's runs → finished.
- *   - If either team is all out (wickets === 10) → finished.
- */
-function isMatchFinished(title) {
-    const scoreRegex = /\b(\d+)\/(\d+)\b/g;
-    let scores = [];
-    let match;
-    while ((match = scoreRegex.exec(title)) !== null) {
-        scores.push({
-            runs: parseInt(match[1], 10),
-            wkts: parseInt(match[2], 10),
-        });
-    }
-
-    if (scores.length < 2) {
-        return false;
-    }
-
-    const runs1 = scores[0].runs;
-    const wkts1 = scores[0].wkts;
-    const runs2 = scores[1].runs;
-    const wkts2 = scores[1].wkts;
-
-    if (runs2 > runs1) return true;
-    if (wkts1 === 10 || wkts2 === 10) return true;
-
-    return false;
+function getTeamAbbr(displayName, apiAbbr) {
+    if (displayName in IPL_TEAMS) return IPL_TEAMS[displayName];
+    return apiAbbr || displayName;
 }
 
-/**
- * Shorten full team names to abbreviations.
- */
-function shortenTitle(titleText) {
-    let shortened = titleText;
-    for (let fullName in IPL_TEAMS) {
-        // Use split/join for replaceAll compatibility in CJS
-        shortened = shortened.split(fullName).join(IPL_TEAMS[fullName]);
+function extractMatchNum(description) {
+    let m = (description || "").match(/^([\w\d]+(?:st|nd|rd|th)?\s+Match(?:\s*\([A-Z]\))?)/);
+    return m ? m[1] : "";
+}
+
+function buildPanelText(competitors) {
+    if (competitors.length < 2) return null;
+
+    let parts = [];
+    for (let i = 0; i < competitors.length; i++) {
+        let comp = competitors[i];
+        let displayName = comp.displayName || "";
+        let apiAbbr = comp.abbreviation || comp.name || "";
+        let abbr = getTeamAbbr(displayName, apiAbbr);
+        let score = comp.score || "";
+        parts.push(score ? abbr + " " + score : abbr);
     }
-    return shortened;
+
+    return parts.join(" v ");
+}
+
+// ---------------------------------------------------------------------------
+// Custom Scorecard Menu Item
+// ---------------------------------------------------------------------------
+
+class MatchMenuItem extends PopupMenu.PopupBaseMenuItem {
+    constructor(matchData) {
+        super({ reactive: true, activate: true });
+
+        this._link = matchData.link || CRICINFO_LIVE;
+
+        let card = new St.BoxLayout({
+            vertical: true,
+            style: "padding: 6px 4px; spacing: 3px;",
+        });
+
+        // Line 1: Venue + Match Number (small, grey)
+        let venueLine = "";
+        if (matchData.venue) venueLine = "🏟️ " + matchData.venue;
+        if (matchData.matchNum) {
+            venueLine += venueLine ? " • " + matchData.matchNum : "🏟️ " + matchData.matchNum;
+        }
+
+        if (venueLine) {
+            card.add_child(new St.Label({
+                text: venueLine,
+                style: "font-size: 0.85em; color: #888888;",
+            }));
+        }
+
+        // Line 2: Score (bold, large)
+        let comps = matchData.competitors || [];
+        let scoreLine = "🏏";
+        if (comps.length >= 2) {
+            let t1 = (comps[0].abbr + " " + (comps[0].score || "")).trim();
+            let t2 = (comps[1].abbr + " " + (comps[1].score || "")).trim();
+            scoreLine = "🏏 " + t1 + " v " + t2;
+        }
+
+        card.add_child(new St.Label({
+            text: scoreLine,
+            style: "font-weight: bold; font-size: 1.1em;",
+        }));
+
+        // Line 3: Context / Status
+        if (matchData.context) {
+            let contextStyle = matchData.isLive
+                ? "font-weight: bold; color: #FF4444; font-size: 0.95em;"
+                : "color: #888888; font-size: 0.95em;";
+            card.add_child(new St.Label({
+                text: "👉 " + matchData.context,
+                style: contextStyle,
+            }));
+        }
+
+        this.addActor(card);
+    }
+
+    activate() {
+        try {
+            Gio.AppInfo.launch_default_for_uri(this._link, null);
+        } catch (e) {
+            global.logError("[IPL Live Score] Could not open URI: " + e.message);
+        }
+        super.activate();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +158,7 @@ class IplLiveScoreApplet extends Applet.TextIconApplet {
         this.menu = new Applet.AppletPopupMenu(this, orientation);
         this.menuManager.addMenu(this.menu);
 
-        // Soup session (Soup 3 API)
+        // Soup session
         this._session = new Soup.Session();
 
         // Polling
@@ -144,23 +191,27 @@ class IplLiveScoreApplet extends Applet.TextIconApplet {
     // -----------------------------------------------------------------------
 
     _adjustPollingRate(iplMatches) {
-        const activeInterval = 60;
-        const idleInterval = 3600; // 1 hour deep sleep
+        const activeInterval = Math.floor(Math.random() * 21) + 55;
+        const idleInterval = 3600;
         const hour = new Date().getHours();
 
         const isMatchInProgress = iplMatches.some(m => m.hasStarted && !m.isFinished);
-        let nextInterval = idleInterval;
+
+        let nextIsActive = false;
 
         if (isMatchInProgress) {
-            nextInterval = activeInterval;
+            nextIsActive = true;
         } else if (hour === 15) {
-            nextInterval = activeInterval;
+            nextIsActive = true;
         } else if (hour >= 19 && hour <= 23) {
-            nextInterval = activeInterval;
+            nextIsActive = true;
         }
 
-        if (this._currentInterval !== nextInterval) {
-            global.log(`[IPL Live Score] Polling Engine shifted to ${nextInterval}s interval`);
+        const nextInterval = nextIsActive ? activeInterval : idleInterval;
+        const wasActive = this._currentInterval < 3600;
+
+        if (nextIsActive || wasActive !== nextIsActive) {
+            global.log("[IPL Live Score] Polling Engine shifted to " + nextInterval + "s interval");
             this._currentInterval = nextInterval;
             this._stopPolling();
             this._startPolling();
@@ -189,7 +240,7 @@ class IplLiveScoreApplet extends Applet.TextIconApplet {
     }
 
     // -----------------------------------------------------------------------
-    // Fallback menu (offline / no matches)
+    // Fallback menu
     // -----------------------------------------------------------------------
 
     _buildFallbackMenu(labelText) {
@@ -209,7 +260,7 @@ class IplLiveScoreApplet extends Applet.TextIconApplet {
     }
 
     // -----------------------------------------------------------------------
-    // Network — Soup 3 async fetch
+    // Network — ESPN Core API
     // -----------------------------------------------------------------------
 
     _fetchScore() {
@@ -217,7 +268,7 @@ class IplLiveScoreApplet extends Applet.TextIconApplet {
 
         let message;
         try {
-            message = Soup.Message.new("GET", RSS_URL);
+            message = Soup.Message.new("GET", API_URL);
         } catch (e) {
             global.logError("[IPL Live Score] Bad URL: " + e.message);
             this._buildFallbackMenu("🏏 IPL: Offline");
@@ -225,10 +276,11 @@ class IplLiveScoreApplet extends Applet.TextIconApplet {
         }
 
         if (!message) {
-            global.logError("[IPL Live Score] Could not create Soup.Message");
             this._buildFallbackMenu("🏏 IPL: Offline");
             return;
         }
+
+        message.get_request_headers().append("User-Agent", "Mozilla/5.0");
 
         try {
             this._session.send_and_read_async(
@@ -238,15 +290,12 @@ class IplLiveScoreApplet extends Applet.TextIconApplet {
                 (session, result) => {
                     try {
                         let bytes = session.send_and_read_finish(result);
-
                         let statusCode = message.get_status();
                         if (statusCode !== Soup.Status.OK) {
-                            global.logWarning("[IPL Live Score] HTTP " + statusCode);
                             this._buildFallbackMenu("🏏 IPL: Offline");
                             return;
                         }
 
-                        // Decode bytes to string
                         let data = bytes.get_data();
                         let text;
                         if (data instanceof Uint8Array) {
@@ -255,7 +304,17 @@ class IplLiveScoreApplet extends Applet.TextIconApplet {
                             text = data.toString();
                         }
 
-                        this._processXml(text);
+                        let apiData;
+                        try {
+                            apiData = JSON.parse(text);
+                        } catch (parseError) {
+                            this._buildFallbackMenu("🏏 IPL: Offline");
+                            return;
+                        }
+
+                        let iplMatches = this._parseApiData(apiData);
+                        this._processMatches(iplMatches);
+
                     } catch (innerError) {
                         global.logError("[IPL Live Score] Response error: " + innerError.message);
                         this._buildFallbackMenu("🏏 IPL: Offline");
@@ -268,85 +327,103 @@ class IplLiveScoreApplet extends Applet.TextIconApplet {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // XML parsing & match processing
-    // -----------------------------------------------------------------------
-
-    _processXml(xmlText) {
-        // Regex to extract <item> blocks with <title> and <link>
-        const matchRegex = /<item>[\s\S]*?<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>[\s\S]*?<link>(.*?)<\/link>[\s\S]*?<\/item>/gi;
-
-        let iplMatches = [];
-        let m;
-
-        while ((m = matchRegex.exec(xmlText)) !== null) {
-            let titleText = m[1] || "";
-            let linkText = (m[2] || "").trim();
-
-            if (titleText.indexOf("Cricinfo Live Scores") !== -1 || titleText.trim() === "") {
-                continue;
-            }
-
-            // Filter: must contain an IPL team name
-            let isIplMatch = TEAM_NAMES.some(function(team) {
-                return titleText.indexOf(team) !== -1;
-            });
-            if (!isIplMatch) continue;
-
-            // Shorten team names
-            let shortened = shortenTitle(titleText);
-
-            // Smart State Math
-            let hasAsterisk = shortened.indexOf("*") !== -1;
-            let hasStarted = /\d/.test(shortened);
-            let finished = isMatchFinished(shortened);
-            let isLive = hasAsterisk && !finished;
-
-            // Replace '*' with 🏏 for display
-            let displayTitle = shortened.split("*").join("🏏");
-
-            iplMatches.push({
-                title: displayTitle,
-                link: linkText,
-                isLive: isLive,
-                hasStarted: hasStarted,
-                isFinished: finished,
-            });
+    _parseApiData(apiData) {
+        let leagues;
+        try {
+            leagues = apiData.sports[0].leagues;
+        } catch (e) {
+            return [];
         }
 
+        if (!leagues || !leagues.length) return [];
+
+        let iplMatches = [];
+
+        for (let l = 0; l < leagues.length; l++) {
+            let events = leagues[l].events || [];
+            for (let e = 0; e < events.length; e++) {
+                let event = events[e];
+                let eventName = event.name || "";
+
+                let hasIplTeam = TEAM_NAMES.some(function(t) {
+                    return eventName.indexOf(t) !== -1;
+                });
+                if (!hasIplTeam) continue;
+
+                let competitors = event.competitors || [];
+                if (competitors.length < 2) continue;
+
+                let fullStatus = event.fullStatus || {};
+                let statusType = fullStatus.type || {};
+                let state = statusType.state || "";
+                let statusDetail = statusType.detail || "";
+
+                let isLive = state === "in";
+                let hasStarted = state === "in" || state === "post";
+                let isFinished = state === "post";
+
+                let venue = event.location || "";
+                let description = event.description || "";
+                let matchNum = extractMatchNum(description);
+                let context = fullStatus.summary || statusDetail;
+                let link = event.link || CRICINFO_LIVE;
+
+                let panelText = buildPanelText(competitors);
+                if (!panelText) continue;
+
+                let compDetails = [];
+                for (let ci = 0; ci < competitors.length; ci++) {
+                    let comp = competitors[ci];
+                    compDetails.push({
+                        abbr: getTeamAbbr(comp.displayName || "", comp.abbreviation || comp.name || ""),
+                        score: comp.score || "",
+                        winner: comp.winner || false,
+                    });
+                }
+
+                iplMatches.push({
+                    panelText: panelText,
+                    link: link,
+                    isLive: isLive,
+                    hasStarted: hasStarted,
+                    isFinished: isFinished,
+                    venue: venue,
+                    matchNum: matchNum,
+                    context: context,
+                    competitors: compDetails,
+                });
+            }
+        }
+
+        return iplMatches;
+    }
+
+    // -----------------------------------------------------------------------
+    // Match processing — builds Scorecard UI
+    // -----------------------------------------------------------------------
+
+    _processMatches(iplMatches) {
         if (iplMatches.length === 0) {
             this._buildFallbackMenu("🏏 IPL: No Live Matches");
             return;
         }
 
-        // Reverse so newest matches come first
-        iplMatches.reverse();
-
-        // ---------------------------------------------------------------
         // Priority Selector: Live > Started > Scheduled
-        // ---------------------------------------------------------------
         let activeMatch =
             iplMatches.find(function(m) { return m.isLive; }) ||
             iplMatches.find(function(m) { return m.hasStarted; }) ||
             iplMatches[0];
 
-        // ---------------------------------------------------------------
-        // Build the Dynamic Menu
-        // ---------------------------------------------------------------
+        let panelLabel = "🏏 " + activeMatch.panelText;
+        this.set_applet_label(panelLabel);
+
+        // Build the Dynamic Menu with Scorecards
         this.menu.removeAll();
 
-        let scoreText = activeMatch.title;
-        let scoreLink = activeMatch.link;
-
-        // Set panel label
-        this.set_applet_label(scoreText);
-
-        // --- Timestamp ---
+        // Timestamp
         let now = new Date();
         let timeStr = now.toLocaleTimeString("en-GB", {
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
+            hour: "2-digit", minute: "2-digit", second: "2-digit",
         });
         let timeItem = new PopupMenu.PopupMenuItem(
             "Last Updated: " + timeStr, { reactive: false }
@@ -354,69 +431,26 @@ class IplLiveScoreApplet extends Applet.TextIconApplet {
         this.menu.addMenuItem(timeItem);
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        // --- Open in Browser ---
-        let openItem = new PopupMenu.PopupMenuItem("🌐 Open Match in Browser");
-        openItem.connect("activate", function() {
-            try {
-                Gio.AppInfo.launch_default_for_uri(scoreLink, null);
-            } catch (e) {
-                global.logError("[IPL Live Score] Could not open URI: " + e.message);
-            }
-        });
-        this.menu.addMenuItem(openItem);
+        // Render each match as a Scorecard
+        for (let i = 0; i < iplMatches.length; i++) {
+            this.menu.addMenuItem(new MatchMenuItem(iplMatches[i]));
+            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        }
 
-        // --- Copy Score ---
+        // Copy Score
         let copyItem = new PopupMenu.PopupMenuItem("📋 Copy Score");
         copyItem.connect("activate", function() {
             let clipboard = St.Clipboard.get_default();
-            clipboard.set_text(St.ClipboardType.CLIPBOARD, scoreText);
+            clipboard.set_text(St.ClipboardType.CLIPBOARD, panelLabel);
         });
         this.menu.addMenuItem(copyItem);
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        // --- Categorize remaining matches ---
-        let otherMatches = iplMatches.filter(function(m) { return m !== activeMatch; });
-
-        let ongoingMatches = otherMatches.filter(function(m) { return m.isLive; });
-        let completedMatches = otherMatches.filter(function(m) { return m.isFinished; });
-        let scheduledMatches = otherMatches.filter(function(m) { return !m.hasStarted; });
-
-        let self = this;
-
-        function addCategory(categoryTitle, matchesArray) {
-            if (matchesArray.length === 0) return;
-
-            // Non-reactive bold header
-            let header = new PopupMenu.PopupMenuItem(categoryTitle, { reactive: false });
-            header.label.set_style("font-weight: bold; font-size: 0.9em; color: #aaaaaa;");
-            self.menu.addMenuItem(header);
-
-            // Clickable match items
-            matchesArray.forEach(function(match) {
-                let item = new PopupMenu.PopupMenuItem("  " + match.title);
-                item.connect("activate", function() {
-                    try {
-                        Gio.AppInfo.launch_default_for_uri(match.link, null);
-                    } catch (e) {
-                        global.logError("[IPL Live Score] Could not open URI: " + e.message);
-                    }
-                });
-                self.menu.addMenuItem(item);
-            });
-
-            self.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        }
-
-        addCategory("🔴 ONGOING", ongoingMatches);
-        addCategory("✅ COMPLETED", completedMatches);
-        addCategory("📅 SCHEDULED", scheduledMatches);
-
-        // --- Refresh Now ---
+        // Refresh Now
         let refreshItem = new PopupMenu.PopupMenuItem("🔄 Refresh Now");
         refreshItem.connect("activate", () => this._manualRefresh());
         this.menu.addMenuItem(refreshItem);
 
-        // --- Smart Polling Adjustment ---
+        // Smart Polling
         this._adjustPollingRate(iplMatches);
     }
 }

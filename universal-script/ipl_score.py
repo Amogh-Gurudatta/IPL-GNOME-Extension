@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-IPL Live Score — Universal Bar Script
+IPL Live Score — Universal Bar Script (v3.0.0)
 Works with Waybar, Polybar, XFCE Genmon, dwm, macOS xbar/SwiftBar, MATE, and
 any status bar that reads stdout.
+
+Data source: ESPN Core API (unprotected, no WAF, no auth tokens).
 
 Usage:
     python3 ipl_score.py --format waybar     # JSON output for Waybar
@@ -23,13 +25,13 @@ import re
 import sys
 import time
 import urllib.request
-from xml.etree import ElementTree
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-RSS_URL = "http://static.cricinfo.com/rss/livescores.xml"
+API_URL = "https://site.api.espn.com/apis/personalized/v2/scoreboard/header?sport=cricket"
+CRICINFO_LIVE = "https://www.espncricinfo.com/live-cricket-scores"
 
 IPL_TEAMS = {
     "Chennai Super Kings": "CSK",
@@ -47,272 +49,299 @@ IPL_TEAMS = {
 
 TEAM_NAMES = list(IPL_TEAMS.keys())
 
-CRICINFO_BASE = "https://www.espncricinfo.com"
-
 
 # ---------------------------------------------------------------------------
-# Core Logic
+# Core Logic — ESPN Core API
 # ---------------------------------------------------------------------------
 
-def is_match_finished(title: str) -> bool:
-    """
-    Determine whether a match has finished based on the score string.
-
-    Rules:
-      - If the chasing team's runs exceed the first team's runs → finished.
-      - If either team is all out (wickets == 10) → finished.
-    """
-    scores = re.findall(r"\b(\d+)/(\d+)\b", title)
-
-    if len(scores) < 2:
-        return False
-
-    runs1, wkts1 = int(scores[0][0]), int(scores[0][1])
-    runs2, wkts2 = int(scores[1][0]), int(scores[1][1])
-
-    if runs2 > runs1:
-        return True
-    if wkts1 == 10 or wkts2 == 10:
-        return True
-
-    return False
+def _get_team_abbr(display_name, api_abbr):
+    """Get team abbreviation: prefer our IPL_TEAMS dict, fallback to API's own abbreviation."""
+    if display_name in IPL_TEAMS:
+        return IPL_TEAMS[display_name]
+    return api_abbr or display_name
 
 
-def shorten_title(title: str) -> str:
-    """Replace full team names with abbreviations."""
-    for full_name, abbr in IPL_TEAMS.items():
-        title = title.replace(full_name, abbr)
-    return title
+def _extract_match_num(description):
+    """Extract match number from description like '14th Match (N), Indian Premier League at Delhi, Apr 8 2026'."""
+    m = re.match(r"^([\w\d]+(?:st|nd|rd|th)?\s+Match(?:\s*\([A-Z]\))?)", description or "")
+    return m.group(1) if m else ""
+
+
+def _build_panel_text(competitors):
+    """Build the short panel bar text: T1 T1Score v T2 T2Score."""
+    if len(competitors) < 2:
+        return None
+
+    parts = []
+    for comp in competitors:
+        display_name = comp.get("displayName", "")
+        api_abbr = comp.get("abbreviation", comp.get("name", ""))
+        abbr = _get_team_abbr(display_name, api_abbr)
+        score = comp.get("score", "")
+
+        team_part = abbr
+        if score:
+            team_part += f" {score}"
+        parts.append(team_part)
+
+    return " v ".join(parts)
 
 
 def fetch_and_parse():
     """
-    Fetch the RSS feed, extract IPL matches, and return a dict with:
-        active_match: str | None
-        ongoing:      list[dict]   — {title, link}
-        completed:    list[dict]   — {title, link}
-        scheduled:    list[dict]   — {title, link}
-        active_link:  str | None
+    Fetch live scores from ESPN Core API.
+    Returns a list of match dicts with rich scorecard data, or None on failure.
     """
     try:
-        req = urllib.request.Request(RSS_URL, headers={
-            "User-Agent": "IPL-Live-Score/2.0",
-        })
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            xml_data = resp.read().decode("utf-8")
+        req = urllib.request.Request(API_URL, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = resp.read().decode("utf-8")
     except Exception:
         return None
 
     try:
-        root = ElementTree.fromstring(xml_data)
-    except ElementTree.ParseError:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+    try:
+        leagues = data["sports"][0]["leagues"]
+    except (KeyError, TypeError, IndexError):
         return None
 
     ipl_matches = []
 
-    for item in root.iter("item"):
-        title_el = item.find("title")
-        link_el = item.find("link")
-        if title_el is None or not title_el.text:
-            continue
+    for league in leagues:
+        events = league.get("events", [])
+        for event in events:
+            event_name = event.get("name", "")
 
-        raw_title = title_el.text.strip()
-        raw_link = (link_el.text.strip() if link_el is not None and link_el.text else CRICINFO_BASE)
+            if not any(t in event_name for t in TEAM_NAMES):
+                continue
 
-        # Filter: must contain an IPL team name
-        if not any(team in raw_title for team in TEAM_NAMES):
-            continue
+            competitors = event.get("competitors", [])
+            if len(competitors) < 2:
+                continue
 
-        # Shorten names
-        shortened = shorten_title(raw_title)
+            # Extract state
+            full_status = event.get("fullStatus", {})
+            status_type = full_status.get("type", {})
+            state = status_type.get("state", "")
+            status_detail = status_type.get("detail", "")
 
-        # Smart State Math
-        has_asterisk = "*" in shortened
-        has_started = bool(re.search(r"\d", shortened))
-        finished = is_match_finished(shortened)
-        is_live = has_asterisk and not finished
+            is_live = state == "in"
+            has_started = state in ("in", "post")
+            is_finished = state == "post"
 
-        # Replace '*' with 🏏 for display
-        display_title = shortened.replace("*", "🏏")
+            # Scorecard fields
+            venue = event.get("location", "")
+            description = event.get("description", "")
+            match_num = _extract_match_num(description)
+            context = full_status.get("summary", status_detail)
+            link = event.get("link", CRICINFO_LIVE)
 
-        ipl_matches.append({
-            "title": display_title,
-            "link": raw_link,
-            "is_live": is_live,
-            "has_started": has_started,
-            "is_finished": finished,
-        })
+            # Panel text (short)
+            panel_text = _build_panel_text(competitors)
+            if not panel_text:
+                continue
 
-    if not ipl_matches:
-        return {
-            "active_match": None,
-            "active_link": None,
-            "ongoing": [],
-            "completed": [],
-            "scheduled": [],
-            "is_match_in_progress": False,
-        }
+            # Full display with status
+            display_title = panel_text
+            if status_detail:
+                display_title += f" | {status_detail}"
+            display_title = re.sub(r"  +", " ", display_title).strip()
 
-    # Reverse so newest matches come first
-    ipl_matches.reverse()
+            # Build competitor details for scorecard
+            comp_details = []
+            for comp in competitors:
+                dn = comp.get("displayName", "")
+                aa = comp.get("abbreviation", comp.get("name", ""))
+                comp_details.append({
+                    "abbr": _get_team_abbr(dn, aa),
+                    "score": comp.get("score", ""),
+                    "winner": comp.get("winner", False),
+                })
 
-    # Priority Selector: Live > Started > Scheduled
-    active = (
-        next((m for m in ipl_matches if m["is_live"]), None)
-        or next((m for m in ipl_matches if m["has_started"]), None)
-        or ipl_matches[0]
-    )
+            ipl_matches.append({
+                "title": display_title,
+                "panel_text": panel_text,
+                "link": link,
+                "is_live": is_live,
+                "has_started": has_started,
+                "is_finished": is_finished,
+                # Scorecard fields
+                "venue": venue,
+                "match_num": match_num,
+                "context": context,
+                "competitors": comp_details,
+            })
 
-    # Categorize the rest (excluding the active match)
-    others = [m for m in ipl_matches if m is not active]
-    ongoing = [{"title": m["title"], "link": m["link"]} for m in others if m["is_live"]]
-    completed = [{"title": m["title"], "link": m["link"]} for m in others if m["is_finished"]]
-    scheduled = [{"title": m["title"], "link": m["link"]} for m in others if not m["has_started"]]
+    return ipl_matches
 
-    is_match_in_progress = any(m["has_started"] and not m["is_finished"] for m in ipl_matches)
 
-    return {
-        "active_match": active["title"],
-        "active_link": active["link"],
-        "ongoing": ongoing,
-        "completed": completed,
-        "scheduled": scheduled,
-        "is_match_in_progress": is_match_in_progress,
-    }
+# ---------------------------------------------------------------------------
+# Scorecard Builders
+# ---------------------------------------------------------------------------
+
+def build_pango_scorecard(match):
+    """Build a rich multi-line scorecard using Pango markup (for Waybar tooltip)."""
+    lines = []
+
+    # Line 1: Venue + Match Num
+    venue_line = ""
+    if match["venue"]:
+        venue_line = f'🏟️ {match["venue"]}'
+    if match["match_num"]:
+        venue_line += f' • {match["match_num"]}' if venue_line else f'🏟️ {match["match_num"]}'
+    if venue_line:
+        lines.append(f'<span size="small" color="gray">{venue_line}</span>')
+
+    # Line 2: Score
+    comps = match["competitors"]
+    score_line = f'🏏 {comps[0]["abbr"]} {comps[0]["score"]} v {comps[1]["abbr"]} {comps[1]["score"]}'
+    score_line = re.sub(r"  +", " ", score_line).strip()
+    lines.append(f'<b>{score_line}</b>')
+
+    # Line 3: Context
+    if match["context"]:
+        if match["is_live"]:
+            lines.append(f'<span color="#FF4444"><b>👉 {match["context"]}</b></span>')
+        else:
+            lines.append(f'<span color="gray">👉 {match["context"]}</span>')
+
+    return "\n".join(lines)
+
+
+def build_plain_scorecard(match):
+    """Build a rich multi-line scorecard using plain text (for text/xbar/mate)."""
+    lines = []
+
+    # Line 1: Venue + Match Num
+    venue_line = ""
+    if match["venue"]:
+        venue_line = f'🏟️ {match["venue"]}'
+    if match["match_num"]:
+        venue_line += f' • {match["match_num"]}' if venue_line else f'🏟️ {match["match_num"]}'
+    if venue_line:
+        lines.append(venue_line)
+
+    # Line 2: Score
+    comps = match["competitors"]
+    score_line = f'🏏 {comps[0]["abbr"]} {comps[0]["score"]} v {comps[1]["abbr"]} {comps[1]["score"]}'
+    score_line = re.sub(r"  +", " ", score_line).strip()
+    lines.append(score_line)
+
+    # Line 3: Context
+    if match["context"]:
+        lines.append(f'👉 {match["context"]}')
+
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
 # Output Formatters
 # ---------------------------------------------------------------------------
 
-def build_tooltip(data: dict) -> str:
-    """Build a categorized multi-line tooltip string."""
-    sections = []
-
-    if data["ongoing"]:
-        sections.append("🔴 ONGOING\n" + "\n".join(f"  {m['title']}" for m in data["ongoing"]))
-    if data["completed"]:
-        sections.append("✅ COMPLETED\n" + "\n".join(f"  {m['title']}" for m in data["completed"]))
-    if data["scheduled"]:
-        sections.append("📅 SCHEDULED\n" + "\n".join(f"  {m['title']}" for m in data["scheduled"]))
-
-    return "\n\n".join(sections) if sections else "No other IPL matches"
-
-
-def format_waybar(data: dict) -> str:
-    """Output Waybar-compatible JSON to stdout."""
-    if data["active_match"] is None:
+def format_waybar(matches, active):
+    """Output Waybar-compatible JSON with rich Pango tooltip."""
+    if active is None:
         return json.dumps({
             "text": "🏏 IPL: No Live Matches",
-            "tooltip": "No IPL matches found in the RSS feed",
+            "tooltip": "No IPL matches found",
             "class": "idle",
         })
 
-    return json.dumps({
-        "text": f"🏏 {data['active_match']}",
-        "tooltip": build_tooltip(data),
-        "class": "live" if data["ongoing"] else "idle",
-    })
+    # Build rich tooltip with all match scorecards
+    cards = []
+    for m in matches:
+        cards.append(build_pango_scorecard(m))
+
+    tooltip = "\n\n".join(cards) if cards else "No IPL matches"
+
+    panel = f'🏏 {active["panel_text"]}'
+    css_class = "live" if any(m["is_live"] for m in matches) else "idle"
+
+    return json.dumps({"text": panel, "tooltip": tooltip, "class": css_class})
 
 
-def format_text(data: dict) -> str:
-    """Output plain text for Polybar / XFCE Genmon."""
-    if data["active_match"] is None:
+def format_text(matches, active):
+    """Output plain text with scorecards for Polybar / XFCE Genmon."""
+    if active is None:
         return "🏏 IPL: No Live Matches"
 
-    lines = [f"🏏 {data['active_match']}"]
+    sections = []
+    for m in matches:
+        sections.append(build_plain_scorecard(m))
 
-    if data["ongoing"]:
-        lines.append("")
-        lines.append("🔴 ONGOING")
-        lines.extend(f"  {m['title']}" for m in data["ongoing"])
-
-    if data["completed"]:
-        lines.append("")
-        lines.append("✅ COMPLETED")
-        lines.extend(f"  {m['title']}" for m in data["completed"])
-
-    if data["scheduled"]:
-        lines.append("")
-        lines.append("📅 SCHEDULED")
-        lines.extend(f"  {m['title']}" for m in data["scheduled"])
-
-    return "\n".join(lines)
+    return "\n\n".join(sections)
 
 
-def format_dwm(data: dict) -> str:
-    """
-    Output a single line for dwm's xsetroot -name.
-    dwm has no tooltip or multiline support — just the active match.
-    """
-    if data["active_match"] is None:
+def format_dwm(matches, active):
+    """Output a single line for dwm's xsetroot -name."""
+    if active is None:
         return "🏏 IPL: No Live Matches"
-    return f"🏏 {data['active_match']}"
+    panel = f'🏏 {active["panel_text"]}'
+    if active["context"]:
+        panel += f' | {active["context"]}'
+    return panel
 
 
-def format_xbar(data: dict) -> str:
-    """
-    Output xbar/SwiftBar-compatible format for macOS.
-
-    Line 1: The activeMatch string (goes on the Mac menu bar).
-    Line 2: --- (separator — everything below goes in the dropdown).
-    Subsequent lines: Categorized matches with clickable links.
-    """
-    if data["active_match"] is None:
-        lines = [
+def format_xbar(matches, active):
+    """Output xbar/SwiftBar-compatible format with scorecards for macOS."""
+    if active is None:
+        return "\n".join([
             "🏏 IPL: No Live Matches",
             "---",
             "No IPL matches found | color=gray",
             "---",
-            f"Refresh | refresh=true",
-        ]
-        return "\n".join(lines)
+            "Refresh | refresh=true",
+        ])
 
     lines = []
 
     # Line 1 — menu bar text
-    lines.append(f"🏏 {data['active_match']}")
-
-    # Line 2 — dropdown separator
+    lines.append(f'🏏 {active["panel_text"]}')
     lines.append("---")
 
-    # Active match (highlighted)
-    active_link = data.get("active_link", CRICINFO_BASE)
-    lines.append(f"🏏 {data['active_match']} | href={active_link} color=#FFD700")
+    # Scorecards
+    for m in matches:
+        comps = m["competitors"]
+        venue_line = ""
+        if m["venue"]:
+            venue_line = f'🏟️ {m["venue"]}'
+        if m["match_num"]:
+            venue_line += f' • {m["match_num"]}' if venue_line else f'🏟️ {m["match_num"]}'
 
-    # --- Categorized sections ---
-    if data["ongoing"]:
+        if venue_line:
+            lines.append(f'{venue_line} | color=gray size=11')
+
+        score_line = f'🏏 {comps[0]["abbr"]} {comps[0]["score"]} v {comps[1]["abbr"]} {comps[1]["score"]}'
+        score_line = re.sub(r"  +", " ", score_line).strip()
+
+        if m["is_live"]:
+            lines.append(f'{score_line} | color=#FFD700 size=14 href={CRICINFO_LIVE}')
+        elif m["is_finished"]:
+            lines.append(f'{score_line} | size=14 href={CRICINFO_LIVE}')
+        else:
+            lines.append(f'{score_line} | size=14 href={CRICINFO_LIVE}')
+
+        if m["context"]:
+            if m["is_live"]:
+                lines.append(f'👉 {m["context"]} | color=#FF4444 size=12')
+            else:
+                lines.append(f'👉 {m["context"]} | color=gray size=12')
+
         lines.append("---")
-        lines.append("🔴 ONGOING | color=red size=13")
-        for m in data["ongoing"]:
-            lines.append(f"  {m['title']} | href={m['link']}")
 
-    if data["completed"]:
-        lines.append("---")
-        lines.append("✅ COMPLETED | color=green size=13")
-        for m in data["completed"]:
-            lines.append(f"  {m['title']} | href={m['link']}")
-
-    if data["scheduled"]:
-        lines.append("---")
-        lines.append("📅 SCHEDULED | color=cyan size=13")
-        for m in data["scheduled"]:
-            lines.append(f"  {m['title']} | href={m['link']}")
-
-    lines.append("---")
     lines.append("Refresh | refresh=true")
-
     return "\n".join(lines)
 
 
-def format_mate(data: dict) -> str:
-    """
-    Output for MATE Desktop's Command Applet.
-    Prints the activeMatch on the first line (main display).
-    """
-    if data["active_match"] is None:
+def format_mate(matches, active):
+    """Output for MATE Desktop's Command Applet."""
+    if active is None:
         return "🏏 IPL: No Live Matches"
-    return f"🏏 {data['active_match']}"
+    return f'🏏 {active["panel_text"]}'
 
 
 # ---------------------------------------------------------------------------
@@ -327,7 +356,7 @@ def main():
         "--format",
         choices=["waybar", "text", "dwm", "xbar", "mate"],
         default="text",
-        help="Output format: 'waybar' for JSON, 'text' for Polybar/XFCE, 'dwm' for xsetroot, 'xbar' for macOS xbar/SwiftBar, 'mate' for MATE Command Applet",
+        help="Output format",
     )
     args = parser.parse_args()
 
@@ -335,7 +364,7 @@ def main():
     # Gatekeeper Logic / Smart Caching
     # -----------------------------------------------------------------------
     CACHE_FILE = os.path.expanduser("~/.cache/ipl_score_cache.json")
-    
+
     current_time = time.time()
     current_hour = datetime.datetime.now().hour
 
@@ -367,13 +396,13 @@ def main():
     # Core Logic
     # -----------------------------------------------------------------------
     if fetch_live:
-        data = fetch_and_parse()
+        matches = fetch_and_parse()
 
-        if data is None:
+        if matches is None:
             if args.format == "waybar":
                 print(json.dumps({
                     "text": "🏏 IPL: Offline",
-                    "tooltip": "Network error — could not reach Cricinfo RSS feed",
+                    "tooltip": "Network error — could not reach ESPN API",
                     "class": "offline",
                 }))
             elif args.format == "xbar":
@@ -382,33 +411,44 @@ def main():
                 print("🏏 IPL: Offline")
             sys.exit(0)
 
+        # Priority Selector: Live > Started > Scheduled
+        active = (
+            next((m for m in matches if m["is_live"]), None)
+            or next((m for m in matches if m["has_started"]), None)
+            or (matches[0] if matches else None)
+        )
+
+        is_match_in_progress = any(
+            m["has_started"] and not m["is_finished"] for m in matches
+        )
+
         formatters = {
-            "waybar": format_waybar,
-            "text": format_text,
-            "dwm": format_dwm,
-            "xbar": format_xbar,
-            "mate": format_mate,
+            "waybar": lambda: format_waybar(matches, active),
+            "text": lambda: format_text(matches, active),
+            "dwm": lambda: format_dwm(matches, active),
+            "xbar": lambda: format_xbar(matches, active),
+            "mate": lambda: format_mate(matches, active),
         }
 
         # Pre-render all formats
-        rendered_outputs = {fmt: func(data) for fmt, func in formatters.items()}
+        rendered_outputs = {fmt: formatters[fmt]() for fmt in formatters}
 
         # -------------------------------------------------------------------
         # Save to Cache
         # -------------------------------------------------------------------
         cache_data = {
             "timestamp": current_time,
-            "isMatchInProgress": data["is_match_in_progress"],
-            "outputs": rendered_outputs
+            "isMatchInProgress": is_match_in_progress,
+            "outputs": rendered_outputs,
         }
-        
+
         try:
             os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
             with open(CACHE_FILE, "w") as f:
                 json.dump(cache_data, f)
         except Exception:
-            pass # Failsafe if ~/.cache is read-only or similar
-            
+            pass
+
         print(rendered_outputs[args.format])
 
 

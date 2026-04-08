@@ -1,22 +1,24 @@
-// IPL Live Score — COSMIC Desktop Applet
+// IPL Live Score — COSMIC Desktop Applet (v3.0.0)
 //
-// A native System76 COSMIC panel applet that streams live IPL cricket scores.
-// Uses ureq for blocking HTTP, regex for XML parsing, and libcosmic for the UI.
+// Data source: ESPN Core API (unprotected, no WAF).
+// Uses ureq for blocking HTTP, serde_json for JSON parsing,
+// and libcosmic for the UI with rich Scorecard layout.
 
 use chrono::Timelike;
 use cosmic_applet::CosmicApplet;
-use iced::widget::{button, column, container, horizontal_rule, row, scrollable, text};
-use iced::{self, Alignment, Application, Command, Element, Length, Subscription, Theme};
+use iced::widget::{button, column, container, horizontal_rule, row, scrollable, text, Column};
+use iced::{self, Alignment, Application, Command, Element, Font, Length, Subscription, Theme};
 use once_cell::sync::Lazy;
-use regex::Regex;
-use std::collections::HashMap;
+use rand::Rng;
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const RSS_URL: &str = "http://static.cricinfo.com/rss/livescores.xml";
+const API_URL: &str =
+    "https://site.api.espn.com/apis/personalized/v2/scoreboard/header?sport=cricket";
+const CRICINFO_LIVE: &str = "https://www.espncricinfo.com/live-cricket-scores";
 
 /// Full team name → abbreviation mapping.
 static IPL_TEAMS: Lazy<Vec<(&str, &str)>> = Lazy::new(|| {
@@ -35,166 +37,225 @@ static IPL_TEAMS: Lazy<Vec<(&str, &str)>> = Lazy::new(|| {
     ]
 });
 
-/// Regex to extract <item> blocks with <title> content.
-static ITEM_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r"(?si)<item>[\s\S]*?<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>[\s\S]*?</item>",
-    )
-    .unwrap()
-});
-
-/// Regex to extract score pairs like 150/4.
-static SCORE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(\d+)/(\d+)\b").unwrap());
-
-/// Regex to detect any digit.
-static DIGIT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\d").unwrap());
-
 // ---------------------------------------------------------------------------
 // Data Model
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
-struct MatchInfo {
-    title: String,
+struct MatchCard {
+    venue_line: String,
+    score_line: String,
+    context_line: String,
+    panel_text: String,
     is_live: bool,
     has_started: bool,
     is_finished: bool,
+    link: String,
 }
 
 #[derive(Debug, Clone, Default)]
 struct FeedData {
-    active_match: String,
-    ongoing: Vec<String>,
-    completed: Vec<String>,
-    scheduled: Vec<String>,
+    active_panel_text: String,
+    cards: Vec<MatchCard>,
     is_match_in_progress: bool,
 }
 
 // ---------------------------------------------------------------------------
-// Core Logic (Pure Functions)
+// Core Logic — ESPN Core API
 // ---------------------------------------------------------------------------
 
-/// Determine whether a match has finished based on runs/wickets.
-fn is_match_finished(title: &str) -> bool {
-    let scores: Vec<(u32, u32)> = SCORE_RE
-        .captures_iter(title)
-        .filter_map(|cap| {
-            let runs = cap[1].parse::<u32>().ok()?;
-            let wkts = cap[2].parse::<u32>().ok()?;
-            Some((runs, wkts))
-        })
-        .collect();
-
-    if scores.len() < 2 {
-        return false;
-    }
-
-    let (runs1, wkts1) = scores[0];
-    let (runs2, wkts2) = scores[1];
-
-    runs2 > runs1 || wkts1 == 10 || wkts2 == 10
-}
-
-/// Replace full team names with abbreviations.
-fn shorten_title(title: &str) -> String {
-    let mut result = title.to_string();
+fn get_team_abbr(display_name: &str, api_abbr: &str) -> String {
     for (full_name, abbr) in IPL_TEAMS.iter() {
-        result = result.replace(full_name, abbr);
+        if *full_name == display_name {
+            return abbr.to_string();
+        }
     }
-    result
+    if !api_abbr.is_empty() {
+        api_abbr.to_string()
+    } else {
+        display_name.to_string()
+    }
 }
 
-/// Fetch the RSS feed and parse it into structured data.
+fn extract_match_num(description: &str) -> String {
+    // Extract "14th Match (N)" or "1st Match" from description like
+    // "14th Match (N), Indian Premier League at Delhi, Apr 8 2026"
+    if let Some(idx) = description.find("Match") {
+        let end = if let Some(paren_end) = description[idx..].find(')') {
+            idx + paren_end + 1
+        } else {
+            idx + 5 // "Match".len()
+        };
+        let candidate = description[..end].trim();
+        // Only return if it starts with a digit or word char
+        if !candidate.is_empty() {
+            return candidate.to_string();
+        }
+    }
+    String::new()
+}
+
+fn build_panel_text(competitors: &[serde_json::Value]) -> Option<String> {
+    if competitors.len() < 2 {
+        return None;
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    for comp in competitors {
+        let display_name = comp["displayName"].as_str().unwrap_or("");
+        let api_abbr = comp["abbreviation"]
+            .as_str()
+            .or_else(|| comp["name"].as_str())
+            .unwrap_or("");
+        let abbr = get_team_abbr(display_name, api_abbr);
+        let score = comp["score"].as_str().unwrap_or("");
+
+        if score.is_empty() {
+            parts.push(abbr);
+        } else {
+            parts.push(format!("{} {}", abbr, score));
+        }
+    }
+
+    Some(parts.join(" v "))
+}
+
 fn fetch_and_parse() -> Option<FeedData> {
-    let resp = ureq::get(RSS_URL)
-        .set("User-Agent", "IPL-Live-Score/2.0")
+    let resp = ureq::get(API_URL)
+        .set("User-Agent", "Mozilla/5.0")
         .call()
         .ok()?;
 
-    let xml_text = resp.into_string().ok()?;
+    let text = resp.into_string().ok()?;
+    let api_data: serde_json::Value = serde_json::from_str(&text).ok()?;
+
+    let leagues = api_data["sports"][0]["leagues"].as_array()?;
 
     let team_names: Vec<&str> = IPL_TEAMS.iter().map(|(name, _)| *name).collect();
 
-    let mut ipl_matches: Vec<MatchInfo> = Vec::new();
+    let mut cards: Vec<MatchCard> = Vec::new();
 
-    for cap in ITEM_RE.captures_iter(&xml_text) {
-        let title_text = cap.get(1).map_or("", |m| m.as_str()).trim().to_string();
+    for league in leagues {
+        let events = match league["events"].as_array() {
+            Some(e) => e,
+            None => continue,
+        };
 
-        if title_text.is_empty() || title_text.contains("Cricinfo Live Scores") {
-            continue;
+        for event in events {
+            let event_name = event["name"].as_str().unwrap_or("");
+
+            if !team_names.iter().any(|t| event_name.contains(t)) {
+                continue;
+            }
+
+            let competitors = match event["competitors"].as_array() {
+                Some(c) => c,
+                None => continue,
+            };
+
+            if competitors.len() < 2 {
+                continue;
+            }
+
+            let state = event["fullStatus"]["type"]["state"]
+                .as_str()
+                .unwrap_or("");
+            let status_detail = event["fullStatus"]["type"]["detail"]
+                .as_str()
+                .unwrap_or("");
+            let context = event["fullStatus"]["summary"]
+                .as_str()
+                .unwrap_or(status_detail);
+
+            let venue = event["location"].as_str().unwrap_or("");
+            let description = event["description"].as_str().unwrap_or("");
+            let match_num = extract_match_num(description);
+            let link = event["link"]
+                .as_str()
+                .unwrap_or(CRICINFO_LIVE)
+                .to_string();
+
+            let panel_text = match build_panel_text(competitors) {
+                Some(t) => t,
+                None => continue,
+            };
+
+            // Build venue line
+            let mut venue_line = String::new();
+            if !venue.is_empty() {
+                venue_line = format!("🏟️ {}", venue);
+            }
+            if !match_num.is_empty() {
+                if venue_line.is_empty() {
+                    venue_line = format!("🏟️ {}", match_num);
+                } else {
+                    venue_line = format!("{} • {}", venue_line, match_num);
+                }
+            }
+
+            // Build score line
+            let c0_dn = competitors[0]["displayName"].as_str().unwrap_or("");
+            let c0_aa = competitors[0]["abbreviation"]
+                .as_str()
+                .or_else(|| competitors[0]["name"].as_str())
+                .unwrap_or("");
+            let c0_score = competitors[0]["score"].as_str().unwrap_or("");
+            let c1_dn = competitors[1]["displayName"].as_str().unwrap_or("");
+            let c1_aa = competitors[1]["abbreviation"]
+                .as_str()
+                .or_else(|| competitors[1]["name"].as_str())
+                .unwrap_or("");
+            let c1_score = competitors[1]["score"].as_str().unwrap_or("");
+
+            let t1 = format!("{} {}", get_team_abbr(c0_dn, c0_aa), c0_score)
+                .trim()
+                .to_string();
+            let t2 = format!("{} {}", get_team_abbr(c1_dn, c1_aa), c1_score)
+                .trim()
+                .to_string();
+            let score_line = format!("🏏 {} v {}", t1, t2);
+
+            // Build context line
+            let context_line = if !context.is_empty() {
+                format!("👉 {}", context)
+            } else {
+                String::new()
+            };
+
+            cards.push(MatchCard {
+                venue_line,
+                score_line,
+                context_line,
+                panel_text,
+                is_live: state == "in",
+                has_started: state == "in" || state == "post",
+                is_finished: state == "post",
+                link,
+            });
         }
-
-        // Filter: must contain an IPL team name
-        if !team_names.iter().any(|team| title_text.contains(team)) {
-            continue;
-        }
-
-        // Shorten team names
-        let shortened = shorten_title(&title_text);
-
-        // Smart State Math
-        let has_asterisk = shortened.contains('*');
-        let has_started = DIGIT_RE.is_match(&shortened);
-        let finished = is_match_finished(&shortened);
-        let is_live = has_asterisk && !finished;
-
-        // Replace '*' with 🏏 for display
-        let display_title = shortened.replace('*', "🏏");
-
-        ipl_matches.push(MatchInfo {
-            title: display_title,
-            is_live,
-            has_started,
-            is_finished: finished,
-        });
     }
 
-    if ipl_matches.is_empty() {
+    if cards.is_empty() {
         return Some(FeedData {
-            active_match: "🏏 IPL: No Live Matches".into(),
+            active_panel_text: "🏏 IPL: No Live Matches".into(),
             ..Default::default()
         });
     }
 
-    // Reverse so newest matches come first
-    ipl_matches.reverse();
-
-    // Priority Selector: Live > Started > Scheduled
-    let active_idx = ipl_matches
+    // Priority Selector
+    let active_idx = cards
         .iter()
-        .position(|m| m.is_live)
-        .or_else(|| ipl_matches.iter().position(|m| m.has_started))
+        .position(|c| c.is_live)
+        .or_else(|| cards.iter().position(|c| c.has_started))
         .unwrap_or(0);
 
-    let active_title = ipl_matches[active_idx].title.clone();
+    let active_panel_text = format!("🏏 {}", cards[active_idx].panel_text);
 
-    // Categorize remaining matches
-    let mut ongoing = Vec::new();
-    let mut completed = Vec::new();
-    let mut scheduled = Vec::new();
-
-    for (i, m) in ipl_matches.iter().enumerate() {
-        if i == active_idx {
-            continue;
-        }
-        if m.is_live {
-            ongoing.push(m.title.clone());
-        } else if m.is_finished {
-            completed.push(m.title.clone());
-        } else if !m.has_started {
-            scheduled.push(m.title.clone());
-        }
-    }
-
-    let is_match_in_progress = ipl_matches
-        .iter()
-        .any(|m| m.has_started && !m.is_finished);
+    let is_match_in_progress = cards.iter().any(|c| c.has_started && !c.is_finished);
 
     Some(FeedData {
-        active_match: active_title,
-        ongoing,
-        completed,
-        scheduled,
+        active_panel_text,
+        cards,
         is_match_in_progress,
     })
 }
@@ -229,15 +290,14 @@ impl Application for IplScoreApplet {
         let app = Self {
             core: cosmic_applet::Core::default(),
             data: FeedData {
-                active_match: "🏏 Loading IPL...".into(),
+                active_panel_text: "🏏 Loading IPL...".into(),
                 ..Default::default()
             },
             popup_open: false,
             loading: true,
-            poll_interval: Duration::from_secs(3600), // Default to 1 hour deep sleep
+            poll_interval: Duration::from_secs(3600),
         };
 
-        // Immediately fetch on startup
         let cmd = Command::perform(async { fetch_scores_async().await }, Message::FeedResult);
 
         (app, cmd)
@@ -258,13 +318,15 @@ impl Application for IplScoreApplet {
                 if let Some(feed_data) = result {
                     self.data = feed_data;
                 } else {
-                    self.data.active_match = "🏏 IPL: Offline".into();
+                    self.data.active_panel_text = "🏏 IPL: Offline".into();
                     self.data.is_match_in_progress = false;
+                    self.data.cards.clear();
                 }
 
-                // Smart Polling Math
+                // Smart Polling with Jitter
                 let hour = chrono::Local::now().hour();
-                let active_interval = Duration::from_secs(60);
+                let jitter = rand::thread_rng().gen_range(55..=75);
+                let active_interval = Duration::from_secs(jitter);
                 let idle_interval = Duration::from_secs(3600);
 
                 let next_interval = if self.data.is_match_in_progress {
@@ -278,7 +340,10 @@ impl Application for IplScoreApplet {
                 };
 
                 if self.poll_interval != next_interval {
-                    println!("[IPL Live Score] Polling Engine shifted to {}s interval", next_interval.as_secs());
+                    println!(
+                        "[IPL Live Score] Polling Engine shifted to {}s interval",
+                        next_interval.as_secs()
+                    );
                     self.poll_interval = next_interval;
                 }
 
@@ -301,64 +366,91 @@ impl Application for IplScoreApplet {
 
     fn view(&self) -> Element<Message> {
         if !self.popup_open {
-            // Compact representation — panel bar text
-            return button(text(&self.data.active_match).size(14))
+            return button(text(&self.data.active_panel_text).size(14))
                 .on_press(Message::TogglePopup)
                 .padding([4, 8])
                 .into();
         }
 
-        // Full representation — expanded popup
-        let mut content = column![].spacing(8).padding(12).width(Length::Fixed(350.0));
+        let mut content = column![].spacing(4).padding(12).width(Length::Fixed(380.0));
 
-        // Active match header
-        content = content.push(
-            text(&self.data.active_match)
-                .size(16)
-                .style(iced::theme::Text::Color(iced::Color::from_rgb(1.0, 0.84, 0.0))),
-        );
+        // Render each match as a Scorecard
+        for (i, card) in self.data.cards.iter().enumerate() {
+            let mut card_col = column![].spacing(2);
+
+            // Line 1: Venue + Match Num (small, grey)
+            if !card.venue_line.is_empty() {
+                card_col = card_col.push(
+                    text(&card.venue_line)
+                        .size(11)
+                        .style(iced::theme::Text::Color(iced::Color::from_rgb(
+                            0.53, 0.53, 0.53,
+                        ))),
+                );
+            }
+
+            // Line 2: Score (bold, large)
+            card_col = card_col.push(
+                text(&card.score_line)
+                    .size(15)
+                    .style(iced::theme::Text::Color(iced::Color::from_rgb(
+                        1.0, 0.84, 0.0,
+                    ))),
+            );
+
+            // Line 3: Context (red if live, grey otherwise)
+            if !card.context_line.is_empty() {
+                let context_color = if card.is_live {
+                    iced::Color::from_rgb(1.0, 0.27, 0.27) // #FF4444
+                } else {
+                    iced::Color::from_rgb(0.53, 0.53, 0.53) // grey
+                };
+                card_col = card_col.push(
+                    text(&card.context_line)
+                        .size(12)
+                        .style(iced::theme::Text::Color(context_color)),
+                );
+            }
+
+            content = content.push(card_col);
+
+            // Separator between cards
+            if i < self.data.cards.len() - 1 {
+                content = content.push(horizontal_rule(1));
+            }
+        }
+
+        // No matches fallback
+        if self.data.cards.is_empty() {
+            content = content.push(
+                text("No IPL matches found")
+                    .size(13)
+                    .style(iced::theme::Text::Color(iced::Color::from_rgb(
+                        0.53, 0.53, 0.53,
+                    ))),
+            );
+        }
+
         content = content.push(horizontal_rule(1));
 
-        // Category sections
-        if !self.data.ongoing.is_empty() {
-            content = content.push(text("🔴 ONGOING").size(13));
-            for m in &self.data.ongoing {
-                content = content.push(text(format!("  {}", m)).size(13));
-            }
-            content = content.push(horizontal_rule(1));
-        }
-
-        if !self.data.completed.is_empty() {
-            content = content.push(text("✅ COMPLETED").size(13));
-            for m in &self.data.completed {
-                content = content.push(text(format!("  {}", m)).size(13));
-            }
-            content = content.push(horizontal_rule(1));
-        }
-
-        if !self.data.scheduled.is_empty() {
-            content = content.push(text("📅 SCHEDULED").size(13));
-            for m in &self.data.scheduled {
-                content = content.push(text(format!("  {}", m)).size(13));
-            }
-            content = content.push(horizontal_rule(1));
-        }
-
         // Refresh button
-        let refresh_label = if self.loading { "Refreshing..." } else { "Refresh Now" };
+        let refresh_label = if self.loading {
+            "Refreshing..."
+        } else {
+            "Refresh Now"
+        };
         content = content.push(
             button(text(refresh_label).size(13))
                 .on_press(Message::Refresh)
                 .width(Length::Fill),
         );
 
-        // Wrap in a container for the popup look
         let popup = container(scrollable(content))
-            .max_height(400.0)
+            .max_height(450.0)
             .style(iced::theme::Container::Box);
 
         column![
-            button(text(&self.data.active_match).size(14))
+            button(text(&self.data.active_panel_text).size(14))
                 .on_press(Message::TogglePopup)
                 .padding([4, 8]),
             popup,
